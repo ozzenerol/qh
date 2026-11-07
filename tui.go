@@ -12,12 +12,69 @@ import (
 	"unicode/utf8"
 )
 
-const tuiHelp = `Enter sends. Ctrl+J or a line that ends with \ adds a new line. Pasted text keeps its lines.
-Esc or Ctrl+C stops a run. Ctrl+C twice on an empty line, or Ctrl+D, quits.
-Up and Down walk the history. Ctrl+T shows or hides the thinking. Ctrl+L clears the screen.
-/new clears the session, /resume picks another one, /think on|off, /sessions, /clear, /exit.
-Start with qh -c to continue the latest session of this folder, or qh -r to pick one.
-Other programs can write to this session (qh run -s NAME -from opus "..."); their messages show here with a label.`
+type slashCmd struct{ name, desc string }
+
+var slashCmds = []slashCmd{
+	{"/help", "keys and commands"},
+	{"/new", "clear this session and start over"},
+	{"/resume", "switch to another session"},
+	{"/sessions", "list the saved sessions"},
+	{"/think on", "Qwen thinks before it answers"},
+	{"/think off", "answer at once, faster and less careful"},
+	{"/clear", "clear the screen"},
+	{"/exit", "quit"},
+}
+
+func helpLines() []string {
+	row := func(k, d string) string {
+		return "  " + cBold + k + cReset + strings.Repeat(" ", max(1, 16-utf8.RuneCountInString(k))) + cGray + d
+	}
+	out := []string{"", cAccent + cBold + "Keys" + cReset}
+	for _, kv := range [][2]string{
+		{"enter", "send"},
+		{"ctrl+j", "new line (pasted text keeps its lines)"},
+		{"esc", "stop the answer"},
+		{"↑ ↓", "history"},
+		{"/", "commands"},
+		{"ctrl+t", "show or hide the thinking"},
+		{"ctrl+l", "clear the screen"},
+		{"ctrl+c ×2", "quit"},
+	} {
+		out = append(out, row(kv[0], kv[1]))
+	}
+	out = append(out, "", cAccent+cBold+"Commands"+cReset)
+	for _, c := range slashCmds {
+		out = append(out, row(c.name, c.desc))
+	}
+	out = append(out, "", cAccent+cBold+"From a shell"+cReset,
+		row("qh -c", "continue the latest session of this folder"),
+		row("qh -r", "pick a session"),
+		row("qh run -from opus -s main \"...\"", ""),
+		"  "+cGray+"writes into this chat; the message shows with the label opus")
+	return out
+}
+
+// sugs returns the commands that match what the user typed after "/".
+func (t *tui) sugs() []slashCmd {
+	in := string(t.buf)
+	if !strings.HasPrefix(in, "/") || strings.Contains(in, "\n") {
+		t.sugFor = ""
+		return nil
+	}
+	if in != t.sugFor {
+		t.sugFor, t.sugSel = in, 0
+	}
+	var out []slashCmd
+	for _, c := range slashCmds {
+		if strings.HasPrefix(c.name, in) && c.name != in || c.name == in && len(in) > 1 {
+			out = append(out, c)
+		}
+	}
+	if t.sugSel >= len(out) {
+		t.sugSel = max(0, len(out)-1)
+	}
+	return out
+}
 
 var spinFrames = []string{"·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"}
 
@@ -61,6 +118,9 @@ type tui struct {
 	picker     *picker
 	gen        int
 	stopAttach chan struct{}
+
+	sugSel int
+	sugFor string
 
 	liveRows  int // rows of the live area at the last draw
 	cursorRow int // row of the cursor inside the live area
@@ -416,7 +476,18 @@ func (t *tui) draw() {
 	if gap > 0 {
 		status += strings.Repeat(" ", gap) + right
 	}
-	rows = append(rows, cGray+clipCols(status, t.width-1))
+	if sg := t.sugs(); len(sg) > 0 {
+		for i, c := range sg {
+			name, desc := cGray+"  "+c.name, cGray+c.desc
+			if i == t.sugSel {
+				name, desc = cAccent+"❯ "+c.name, cAccent+c.desc
+			}
+			pad := strings.Repeat(" ", max(1, 14-utf8.RuneCountInString(c.name)))
+			rows = append(rows, clipCols(name+pad+desc, t.width-1))
+		}
+	} else {
+		rows = append(rows, cGray+clipCols(status, t.width-1))
+	}
 
 	for i, r := range rows {
 		t.w(r + cReset)
@@ -464,7 +535,7 @@ func (t *tui) header() {
 		line(""),
 		line(cGray+"session "+t.session),
 		line(cGray+"cwd "+clipLeft(shortPath(t.cwd), in-4)),
-		line(cGray+"/help for commands, Ctrl+T shows thinking"),
+		line(cGray+"/ for commands · esc stops an answer · ctrl+t thinking"),
 		cFrame+"╰"+strings.Repeat("─", w-2)+"╯",
 	)
 }
@@ -582,6 +653,14 @@ func (t *tui) escape(p []byte) (int, uiAction) {
 		return 0, actNone
 	}
 	seq := string(p[2 : j+1])
+	if sg := t.sugs(); len(sg) > 0 && (seq == "A" || seq == "B") {
+		if seq == "A" {
+			t.sugSel = (t.sugSel + len(sg) - 1) % len(sg)
+		} else {
+			t.sugSel = (t.sugSel + 1) % len(sg)
+		}
+		return j + 1, actNone
+	}
 	switch seq {
 	case "A":
 		s, _ := t.lineBounds()
@@ -632,6 +711,14 @@ func (t *tui) key(r rune) uiAction {
 		if t.notice == "Press Ctrl+C again to quit" {
 			t.notice = ""
 		}
+	}
+	if sg := t.sugs(); len(sg) > 0 && (r == '\r' || r == '\t') {
+		t.buf = []rune(sg[t.sugSel].name)
+		t.cur = len(t.buf)
+		if r == '\r' {
+			return actSubmit
+		}
+		return actNone
 	}
 	switch r {
 	case '\r':
@@ -924,7 +1011,10 @@ func chatTUI(session string, pick bool) error {
 		case <-escFire:
 			if len(t.pending) == 1 && t.pending[0] == 0x1b {
 				t.pending = nil
-				if t.running {
+				switch {
+				case len(t.sugs()) > 0:
+					t.buf, t.cur = nil, 0
+				case t.running:
 					cancelRun()
 				}
 			}
@@ -969,7 +1059,7 @@ func (t *tui) submit() bool {
 	case text == "/exit" || text == "/quit":
 		return true
 	case text == "/help":
-		t.print(strings.Split(cGray+tuiHelp, "\n")...)
+		t.print(helpLines()...)
 		return false
 	case text == "/clear":
 		t.erase()

@@ -50,7 +50,7 @@ qh stop
 
 The chat shows every run on its session, from any client. When Claude runs `qh run -s main -from opus "..."`, the open chat prints the message with an `opus` label and streams the answer. Messages that arrive during a run wait in a queue, and the chat shows them as queued. Esc or Ctrl+C stops the run that is active, whoever started it.
 
-In the chat, Enter sends and Ctrl+J starts a new line (pasted text keeps its lines). Up and Down walk the history, Ctrl+T shows the thinking, and Ctrl+C twice quits. Commands: `/new`, `/resume`, `/think on|off`, `/sessions`, `/clear`, `/exit`. Without a terminal (a pipe, or `TERM=dumb`) qh uses a plain line chat.
+In the chat, Enter sends and Ctrl+J starts a new line (pasted text keeps its lines). Up and Down walk the history, Ctrl+T shows the thinking, and Ctrl+C twice quits. Type `/` for the command menu (`/new`, `/resume`, `/think on|off`, `/sessions`, `/clear`, `/exit`); ↑↓ picks one, Tab completes, Enter runs it. Without a terminal (a pipe, or `TERM=dumb`) qh uses a plain line chat.
 
 Sessions are saved in `~/.qh/sessions/NAME.json`, so they survive a daemon restart.
 
