@@ -88,6 +88,7 @@ type Server struct {
 	sessions map[string]*Session
 	chats    []chatReg // open terminal chats, the newest last
 	stop     chan struct{}
+	gate     chan struct{} // one model request at a time
 }
 
 var validName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
@@ -111,7 +112,7 @@ func serve() error {
 		return err
 	}
 	os.Chmod(sp, 0o600)
-	s := &Server{cfg: loadConfig(), sessions: map[string]*Session{}, stop: make(chan struct{})}
+	s := &Server{cfg: loadConfig(), sessions: map[string]*Session{}, stop: make(chan struct{}), gate: make(chan struct{}, 1)}
 	log.Printf("qh %s listening on %s, model server %s", version, sp, s.cfg.URL)
 	go func() {
 		<-s.stop
@@ -212,7 +213,7 @@ func (s *Server) handle(c net.Conn) {
 	case "sessions":
 		s.listSessions(emit)
 	case "list":
-		b, _ := json.Marshal(sessionList())
+		b, _ := json.Marshal(s.sessionList())
 		emit(Event{T: "done", Text: string(b)})
 	case "reset":
 		ss, err := s.session(req.Session, req.Cwd)
@@ -333,13 +334,14 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 	if req.Think != nil {
 		ss.Think = *req.Think
 	}
+	s.save(ss) // the session is listed while it runs
 	llm := &LLM{BaseURL: s.cfg.URL, Model: s.cfg.Model, HTTP: &http.Client{}}
 	if err := llm.ResolveModel(ctx); err != nil {
 		all(Event{T: "error", Text: err.Error()})
 		all(Event{T: "done", From: req.From})
 		return
 	}
-	a := &Agent{LLM: llm, Cfg: s.cfg}
+	a := &Agent{LLM: llm, Cfg: s.cfg, Gate: s.gate, Save: func() { s.save(ss) }}
 	if req.Compact {
 		if err := a.Compact(ctx, ss, req.Prompt, all); err != nil {
 			all(Event{T: "error", Text: err.Error()})
@@ -354,6 +356,9 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 	final := ""
 	if n := len(ss.Msgs); n > 0 && ss.Msgs[n-1].Role == "assistant" {
 		final = ss.Msgs[n-1].Content
+	}
+	if len(st.Checks) > 0 {
+		final = strings.TrimSpace(final) + "\n\n" + strings.Join(st.Checks, "\n")
 	}
 	all(Event{T: "done", From: req.From, Text: strings.TrimSpace(final), Stats: &st})
 }
@@ -475,12 +480,16 @@ type SessionInfo struct {
 	Name    string    `json:"name"`
 	Updated time.Time `json:"updated"`
 	Msgs    int       `json:"msgs"`
+	Turns   int       `json:"turns"` // prompts from people or programs, not tool results
+	Ctx     int       `json:"ctx"`   // tokens of the last request
+	Running bool      `json:"running"`
+	Step    int       `json:"step"`
 	Cwd     string    `json:"cwd"`
 	First   string    `json:"first"` // the first user message
 	Last    string    `json:"last"`  // the last user message
 }
 
-func sessionList() []SessionInfo {
+func (s *Server) sessionList() []SessionInfo {
 	d, _ := qhDir()
 	files, _ := filepath.Glob(filepath.Join(d, "sessions", "*.json"))
 	var rows []SessionInfo
@@ -493,8 +502,19 @@ func sessionList() []SessionInfo {
 		if b, err := os.ReadFile(f); err == nil {
 			json.Unmarshal(b, &ss)
 		}
-		r := SessionInfo{Name: strings.TrimSuffix(filepath.Base(f), ".json"), Updated: st.ModTime(), Msgs: len(ss.Msgs), Cwd: ss.Cwd}
+		r := SessionInfo{Name: strings.TrimSuffix(filepath.Base(f), ".json"), Updated: st.ModTime(), Msgs: len(ss.Msgs), Cwd: ss.Cwd, Ctx: ss.LastPrompt}
+		if r.Ctx == 0 && len(ss.Msgs) > 0 {
+			r.Ctx = estimateTokens(ss.Msgs)
+		}
+		s.mu.Lock()
+		if live, ok := s.sessions[r.Name]; ok {
+			r.Running, r.Step = live.state()
+		}
+		s.mu.Unlock()
 		for _, m := range ss.Msgs {
+			if m.Role == "user" && m.From != "compact" && m.From != "qh" {
+				r.Turns++
+			}
 			if m.Role == "user" {
 				if r.First == "" {
 					r.First = oneLine(m.Content, 200)
@@ -510,8 +530,16 @@ func sessionList() []SessionInfo {
 
 func (s *Server) listSessions(emit func(Event)) {
 	var b strings.Builder
-	for _, r := range sessionList() {
-		fmt.Fprintf(&b, "%-16s %s  %4d msgs  %s\n", r.Name, r.Updated.Format("2006-01-02 15:04"), r.Msgs, r.Cwd)
+	for _, r := range s.sessionList() {
+		state := ""
+		if r.Running {
+			state = fmt.Sprintf("  RUNNING step %d", r.Step)
+		}
+		ctx := "ctx " + human(r.Ctx)
+		if s.cfg.Context > 0 {
+			ctx += fmt.Sprintf(" (%d%%)", r.Ctx*100/s.cfg.Context)
+		}
+		fmt.Fprintf(&b, "%-16s %s  %3d turns  %-16s %s%s\n", r.Name, r.Updated.Format("2006-01-02 15:04"), r.Turns, ctx, shortPath(r.Cwd), state)
 	}
 	emit(Event{T: "done", Text: strings.TrimRight(b.String(), "\n")})
 }

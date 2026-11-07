@@ -25,6 +25,21 @@ type Session struct {
 	wmu      sync.Mutex // guards watchers and cancel
 	watchers map[chan Event]struct{}
 	cancel   context.CancelFunc
+	running  bool // a run holds mu
+	step     int  // its step
+}
+
+// state reports if a run is going on and at which step.
+func (s *Session) state() (bool, int) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return s.running, s.step
+}
+
+func (s *Session) setState(running bool, step int) {
+	s.wmu.Lock()
+	s.running, s.step = running, step
+	s.wmu.Unlock()
 }
 
 func (s *Session) broadcast(e Event) {
@@ -55,15 +70,17 @@ func (s *Session) cancelRun() bool {
 }
 
 type Stats struct {
-	Model    string  `json:"model"`
-	Steps    int     `json:"steps"`
-	Prompt   int     `json:"prompt_tokens"`
-	Cached   int     `json:"cached_tokens"`
-	Output   int     `json:"output_tokens"`
-	Thinking int     `json:"thinking_chars"`
-	Secs     float64 `json:"secs"`
-	Retries  int     `json:"retries"`
-	Window   int     `json:"window"`
+	Model    string   `json:"model"`
+	Steps    int      `json:"steps"`
+	Prompt   int      `json:"prompt_tokens"`
+	Cached   int      `json:"cached_tokens"`
+	Output   int      `json:"output_tokens"`
+	Thinking int      `json:"thinking_chars"`
+	Secs     float64  `json:"secs"`
+	Retries  int      `json:"retries"`
+	Window   int      `json:"window"`
+	ToolErrs int      `json:"tool_errors"`
+	Checks   []string `json:"checks,omitempty"` // results of the "Done when" commands
 }
 
 type Event struct {
@@ -79,8 +96,80 @@ type Event struct {
 }
 
 type Agent struct {
-	LLM *LLM
-	Cfg Config
+	LLM  *LLM
+	Cfg  Config
+	Gate chan struct{} // one model request at a time across sessions; nil means no gate
+	Save func()        // called after each step, so the session file stays current
+}
+
+// chat sends one request through the gate. The model server answers one
+// request at a time, so a run of another session waits here and says so once.
+func (a *Agent) chat(ctx context.Context, r Request, onDelta func(Delta) bool, emit func(Event), told *bool) (Message, Usage, error) {
+	if a.Gate != nil {
+		select {
+		case a.Gate <- struct{}{}:
+		default:
+			if !*told {
+				emit(Event{T: "info", Text: "waiting for the model: a run of another session is using it"})
+				*told = true
+			}
+			select {
+			case a.Gate <- struct{}{}:
+			case <-ctx.Done():
+				return Message{}, Usage{}, ctx.Err()
+			}
+		}
+		defer func() { <-a.Gate }()
+	}
+	return a.LLM.Chat(ctx, r, onDelta)
+}
+
+const selfCheckAsk = `Before you report, read the task again, mainly its "Done when" part and every numbered or bulleted requirement. For each one, say done or not done. Fix every item that is not done. Then give the final report.`
+
+// doneWhen returns the "Done when" part of a task, or "".
+func doneWhen(prompt string) string {
+	lines := strings.Split(prompt, "\n")
+	for i, l := range lines {
+		if !strings.HasPrefix(strings.ToLower(strings.TrimLeft(l, " #*-")), "done when") {
+			continue
+		}
+		part := []string{l}
+		for _, m := range lines[i+1:] {
+			if strings.TrimSpace(m) == "" || strings.HasPrefix(strings.TrimSpace(m), "#") {
+				break
+			}
+			part = append(part, m)
+		}
+		return strings.Join(part, "\n")
+	}
+	return ""
+}
+
+var checkTools = []string{"./", "go ", "make", "npm ", "pnpm ", "yarn ", "mvn ", "gradle ", "cargo ", "pytest", "python", "uv ", "node ", "bun ", "deno ", "swift ", "dotnet ", "bash ", "sh ", "ctest", "cmake "}
+
+// checkCommands finds the commands in backticks in the "Done when" part.
+func checkCommands(prompt string) []string {
+	part := doneWhen(prompt)
+	var out []string
+	for {
+		a := strings.Index(part, "`")
+		if a < 0 {
+			break
+		}
+		b := strings.Index(part[a+1:], "`")
+		if b < 0 {
+			break
+		}
+		cmd := strings.TrimSpace(part[a+1 : a+1+b])
+		part = part[a+b+2:]
+		for _, p := range checkTools {
+			if strings.HasPrefix(cmd, p) {
+				out = append(out, cmd)
+				break
+			}
+		}
+	}
+	return out
 }
 
 const systemPrompt = `You are a coding agent. You work in %s on %s. Your tools are read, write, edit and bash.
@@ -173,9 +262,15 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	system := Message{Role: "system", Content: buildSystem(s.Cwd, s.ReadOnly)}
 	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})
 	seen := map[string]int{}
+	told := false
+	selfChecked := doneWhen(prompt) == ""
+	checks := checkCommands(prompt)
+	checked := s.ReadOnly || len(checks) == 0
+	defer s.setState(false, 0)
 
 	for st.Steps < a.Cfg.MaxSteps {
 		st.Steps++
+		s.setState(true, st.Steps)
 		think := s.Think
 		var msg Message
 		var u Usage
@@ -183,7 +278,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		for attempt := 0; ; attempt++ {
 			var reasoning, text strings.Builder
 			lastCheck := 0
-			msg, u, err = a.LLM.Chat(ctx, Request{
+			msg, u, err = a.chat(ctx, Request{
 				Messages: append([]Message{system}, s.Msgs...),
 				Tools:    schemas, Think: think, MaxTok: a.Cfg.MaxTokens,
 			}, func(d Delta) bool {
@@ -201,7 +296,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				}
 				lastCheck = n
 				return reasoning.Len() < a.Cfg.ThinkBudget && !looping(reasoning.String()) && !looping(text.String())
-			})
+			}, emit, &told)
 			st.Thinking += reasoning.Len()
 			if errors.Is(err, errStopped) && attempt == 0 {
 				// Ask again with thinking off. The prompt is the same, so the
@@ -229,7 +324,24 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		st.Output += u.CompletionTokens
 		s.LastPrompt = u.PromptTokens + u.CompletionTokens
 		s.Msgs = append(s.Msgs, msg)
+		if a.Save != nil {
+			a.Save()
+		}
 		if len(msg.ToolCalls) == 0 {
+			if !selfChecked {
+				selfChecked = true
+				emit(Event{T: "info", Text: "self-check: asking the model to compare its work with the task"})
+				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk, From: "qh"})
+				continue
+			}
+			if !checked {
+				checked = true
+				if failed := a.runChecks(ctx, tools, checks, &st, emit); failed != "" {
+					s.Msgs = append(s.Msgs, Message{Role: "user", From: "qh", Content: failed})
+					st.Checks = nil
+					continue
+				}
+			}
 			break
 		}
 		for _, tc := range msg.ToolCalls {
@@ -239,6 +351,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			out, ok := tools.Run(ctx, tc.Function.Name, tc.Function.Arguments)
 			if n := seen[key]; n >= 3 {
 				out = fmt.Sprintf("[you made this exact call %d times; the result will not change. Try a different step.]\n", n) + out
+			}
+			if !ok {
+				st.ToolErrs++
 			}
 			emit(Event{T: "result", Tool: tc.Function.Name, OK: ok, Text: firstLine(out)})
 			s.Msgs = append(s.Msgs, Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name, Content: out})
@@ -258,6 +373,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			s.Msgs = append(s.Msgs, Message{Role: "user", From: "compact",
 				Content: "Continue the task from the summary. Check the files before you change them again."})
 		}
+	}
+	if !checked && ctx.Err() == nil && st.Steps < a.Cfg.MaxSteps {
+		a.runChecks(ctx, tools, checks, &st, emit)
 	}
 	if st.Steps >= a.Cfg.MaxSteps {
 		emit(Event{T: "info", Text: fmt.Sprintf("stopped at the step limit (%d)", a.Cfg.MaxSteps)})
@@ -321,4 +439,32 @@ func firstLine(s string) string {
 		return last
 	}
 	return oneLine(lines[0], 120)
+}
+
+// runChecks runs the "Done when" commands and keeps one line per command in
+// st.Checks. When one fails, it returns a message for the model; else "".
+func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, st *Stats, emit func(Event)) string {
+	st.Checks = nil
+	var fails []string
+	for _, c := range cmds {
+		emit(Event{T: "tool", Tool: "check", Text: c})
+		args, _ := json.Marshal(map[string]any{"command": c, "timeout": 900})
+		out, ok := tools.Run(ctx, "bash", string(args))
+		emit(Event{T: "result", Tool: "check", OK: ok, Text: firstLine(out)})
+		if ok {
+			st.Checks = append(st.Checks, "qh check passed: "+c)
+			continue
+		}
+		st.Checks = append(st.Checks, "qh check FAILED: "+c)
+		tail := out
+		if len(tail) > 3000 {
+			tail = tail[len(tail)-3000:]
+		}
+		fails = append(fails, "`"+c+"`:\n"+tail)
+	}
+	if len(fails) == 0 {
+		return ""
+	}
+	return "qh ran the commands from the \"Done when\" part after your report, and these failed:\n\n" +
+		strings.Join(fails, "\n\n") + "\n\nFix the cause, run the command again, then give the final report."
 }

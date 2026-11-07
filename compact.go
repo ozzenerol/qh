@@ -55,9 +55,10 @@ func (a *Agent) Compact(ctx context.Context, s *Session, focus string, emit func
 	msgs = append(msgs, Message{Role: "user", Content: ask})
 	// The tools stay in the request: they are part of the cached prefix.
 	var summary string
+	told := false
 	for try := 0; try < 2 && summary == ""; try++ {
-		msg, _, err := a.LLM.Chat(ctx, Request{Messages: msgs, Tools: toolSchemas(s.ReadOnly), Think: false, MaxTok: 6000},
-			func(Delta) bool { return true })
+		msg, _, err := a.chat(ctx, Request{Messages: msgs, Tools: toolSchemas(s.ReadOnly), Think: false, MaxTok: 6000},
+			func(Delta) bool { return true }, emit, &told)
 		if err != nil {
 			return err
 		}

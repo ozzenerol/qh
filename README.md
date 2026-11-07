@@ -18,9 +18,11 @@ What qh does:
 
 - It sends the thinking back as `reasoning_content` and sets `preserve_thinking`. Each request is then the previous prompt plus new messages, which is what the server's prompt cache can reuse. (The Qwen 3.5+ models have linear-attention layers; their cache can't be trimmed, so a prompt that differs in the middle is processed again from that point.)
 - When the thinking repeats itself or passes `think_budget` characters, qh stops the step and asks again with thinking off.
-- There are four tools: read, write, edit and bash. edit takes one `old`/`new` pair. It still matches when the model copies the line numbers from read or drops trailing spaces. A read-only run (`-ro`) gets read, grep and ls, and no shell.
+- There are four tools: read, write, edit and bash. edit takes one `old`/`new` pair. It still matches when the model copies the line numbers from read or drops trailing spaces. When `old` is not in the file, the error shows the closest lines with their numbers, so the model can copy them without reading the file again. When the model leaves out `path` and only one file holds `old`, qh edits that file and says so. A read-only run (`-ro`) gets read, grep and ls, and no shell.
 - If the server leaves a `<tool_call>` block in the text, qh parses it.
 - The third identical tool call gets a note that the result will not change.
+- When the task has a "Done when" line, qh asks the model once, before the final report, to check each requirement and fix what is missing. In a normal (not read-only) run it then runs the commands in backticks on that line, such as `./mvnw -q test`. If one fails, the model gets the output and one more turn; the report ends with one `qh check passed:` or `qh check FAILED:` line per command.
+- The model server answers one request at a time, so the daemon sends one at a time. A run on another session waits and shows "waiting for the model".
 - Tool output longer than 12000 characters is cut in the middle. The end is kept, since errors are usually there.
 
 ## Install
@@ -47,13 +49,13 @@ qh reset -s lexer
 qh stop
 ```
 
-`qh run` prints the final report on stdout. Each tool call is one line on stderr, and the last line has the step count, tokens and time. Ctrl+C cancels the run, and so does `-timeout` (exit code 124); the daemon then kills the running command.
+`qh run` prints the final report on stdout. The first line on stderr names the session, each tool call is one line, and the last line has the steps, failed tool calls, tokens, time and context size (with a hint to compact past 60% of the window). Ctrl+C cancels the run, and so does `-timeout` (exit code 124); the daemon then kills the running command.
 
 The chat shows every run on its session, from any client. The session name `@chat` means the chat that is open in a terminal (the newest one, if there are several). When Claude runs `qh run -s @chat -from opus "..."`, the open chat prints the message with an `opus` label and streams the answer. Messages that arrive during a run wait in a queue, and the chat shows them as queued. Esc or Ctrl+C stops the run that is active, whoever started it.
 
 In the chat, Enter sends and Ctrl+J starts a new line (pasted text keeps its lines). Up and Down walk the history, Ctrl+T shows the thinking, and Ctrl+C twice quits. Type `/` for the command menu (`/new`, `/resume`, `/think on|off`, `/sessions`, `/clear`, `/exit`); ↑↓ picks one, Tab completes, Enter runs it. Without a terminal (a pipe, or `TERM=dumb`) qh uses a plain line chat.
 
-Sessions are saved in `~/.qh/sessions/NAME.json`, so they survive a daemon restart. A chat started with plain `qh` gets a new session named after the time (`1108-013105`); `qh run` uses `main` unless you give `-s`.
+Sessions are saved in `~/.qh/sessions/NAME.json` after each step, so they survive a daemon restart. `qh sessions` lists them with the number of turns, the context size, and `RUNNING step N` for a run in progress. A chat started with plain `qh` gets a new session named after the time (`1108-013105`); `qh run` uses `main` unless you give `-s`.
 
 ## Compaction
 

@@ -469,3 +469,65 @@ func TestAtChat(t *testing.T) {
 	simple(ClientReq{Op: "stop"})
 	<-done
 }
+
+func TestEditHelpers(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.yml"), []byte("spring:\n  name: a\n  port: 1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b.yml"), []byte("spring:\n  name: b\n"), 0o644)
+	tl := &Tools{Cwd: dir}
+	ctx := context.Background()
+	// no path, old in one file: qh uses that file
+	if out, ok := tl.Run(ctx, "edit", `{"old":"  port: 1","new":"  port: 2"}`); !ok || !strings.Contains(out, "a.yml") {
+		t.Fatalf("no path: %s", out)
+	}
+	// no path, old in two files: error that lists both
+	if out, ok := tl.Run(ctx, "edit", `{"old":"spring:","new":"x"}`); ok || !strings.Contains(out, "a.yml") || !strings.Contains(out, "b.yml") {
+		t.Fatalf("two files: %s", out)
+	}
+	// old not found: the closest lines come back with numbers
+	out, ok := tl.Run(ctx, "edit", `{"path":"a.yml","old":"spring:\n  name: a\n  port: 9","new":"x"}`)
+	if ok || !strings.Contains(out, "2 of the 3 lines") || !strings.Contains(out, "3\t  port: 2") {
+		t.Fatalf("nearest: %s", out)
+	}
+}
+
+func TestDoneWhen(t *testing.T) {
+	p := "Fix the parser.\n\nDone when: `./mvnw -q test -Dtest=FooTest` passes and `the docs` say so.\nAlso `go test ./...`\n\nNotes: `make lint`"
+	got := checkCommands(p)
+	if len(got) != 2 || got[0] != "./mvnw -q test -Dtest=FooTest" || got[1] != "go test ./..." {
+		t.Fatalf("checks: %q", got)
+	}
+	if doneWhen("no criteria here") != "" {
+		t.Fatal("doneWhen found a part that is not there")
+	}
+}
+
+func TestSelfCheckAndChecks(t *testing.T) {
+	dir := t.TempDir()
+	var asks []string
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []Message `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		asks = append(asks, body.Messages[len(body.Messages)-1].Content)
+		n++
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"report %d\"}}]}\n\ndata: [DONE]\n\n", n)
+	}))
+	defer srv.Close()
+	a := &Agent{LLM: &LLM{BaseURL: srv.URL, Model: "m", HTTP: srv.Client()}, Cfg: Config{MaxSteps: 10, MaxTokens: 100, ThinkBudget: 30000}}
+	s := &Session{Name: "t", Cwd: dir}
+	st := a.Run(context.Background(), s, "Do it.\n\nDone when: `bash -c 'exit 1'` passes", "", func(Event) {})
+	// 1 answer, 2 self-check, 3 after the failed check; the check runs only once
+	if n != 3 || !strings.Contains(asks[1], "Before you report") || !strings.Contains(asks[2], "these failed") {
+		t.Fatalf("n=%d asks=%q", n, asks)
+	}
+	if st.Checks != nil {
+		t.Fatalf("checks after the retry: %q", st.Checks)
+	}
+	if last := s.Msgs[len(s.Msgs)-1]; last.Content != "report 3" {
+		t.Fatalf("last: %q", last.Content)
+	}
+}

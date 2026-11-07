@@ -150,14 +150,31 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		}
 		return fmt.Sprintf("wrote %s (%d lines)", p, strings.Count(c, "\n")+1), true
 	case "edit":
-		if e := need("path", "old", "new"); e != "" {
-			return e, false
-		}
-		p, _ := s("path")
+		p, hasPath := s("path")
 		o, _ := s("old")
+		note := ""
+		if !hasPath && o != "" {
+			// Qwen sometimes leaves out path. When one file holds old, use it.
+			files := t.filesWith(ctx, o)
+			switch len(files) {
+			case 1:
+				p, args["path"], note = files[0], files[0], "note: path was missing; old is only in "+files[0]+", so qh used it. Always give path.\n"
+			case 0:
+				return `error: edit needs the "path" argument, and old is in no file of the project. Call edit {"path": "...", "old": "...", "new": "..."}.`, false
+			default:
+				if len(files) > 10 {
+					files = files[:10]
+				}
+				return `error: edit needs the "path" argument. old is in more than one file: ` + strings.Join(files, ", ") + `. Call edit {"path": "...", "old": "...", "new": "..."}.`, false
+			}
+		}
+		if e := need("path", "old", "new"); e != "" {
+			return e + `. Call edit {"path": "...", "old": "...", "new": "..."}.`, false
+		}
 		nw, _ := s("new")
 		all := args["all"] == true || args["all"] == "true"
-		return t.edit(t.path(p), p, o, nw, all)
+		out, ok := t.edit(t.path(p), p, o, nw, all)
+		return note + out, ok
 	case "bash":
 		if e := need("command"); e != "" {
 			return e, false
@@ -278,7 +295,7 @@ func (t *Tools) edit(fp, shown, old, nw string, all bool) (string, bool) {
 	}
 	switch {
 	case cnt == 0:
-		return "error: old text not found in " + shown + ". " + nearest(src, old) + " Read the file again and copy the text exactly.", false
+		return "error: old text not found in " + shown + ". " + nearest(src, old), false
 	case cnt > 1 && !all:
 		return fmt.Sprintf("error: old text appears %d times in %s (lines %s). Add more lines around it so it is unique, or set all=true.",
 			cnt, shown, lineNums(src, old)), false
@@ -345,23 +362,85 @@ func looseFind(src, old string) (string, bool) {
 	return match, found == 1
 }
 
+// nearest finds the part of src that is most like old and shows it with line
+// numbers, so the model can copy the right text without reading the file again.
 func nearest(src, old string) string {
-	first := ""
-	for l := range strings.SplitSeq(old, "\n") {
-		if strings.TrimSpace(l) != "" {
-			first = strings.TrimSpace(l)
-			break
+	want := strings.Split(strings.TrimRight(old, "\n"), "\n")
+	lines := strings.Split(src, "\n")
+	idx := map[string][]int{}
+	for i, l := range lines {
+		if k := strings.TrimSpace(l); k != "" {
+			idx[k] = append(idx[k], i)
 		}
 	}
-	if first == "" {
-		return ""
-	}
-	for i, l := range strings.Split(src, "\n") {
-		if strings.Contains(l, first) {
-			return fmt.Sprintf("The first line of old is at line %d, so a later line differs.", i+1)
+	votes := map[int]int{}
+	for j, w := range want {
+		for _, i := range idx[strings.TrimSpace(w)] {
+			votes[i-j]++
 		}
 	}
-	return "Even the first line of old is not in the file."
+	best, n := 0, 0
+	for start, v := range votes {
+		if v > n || (v == n && start < best) {
+			best, n = start, v
+		}
+	}
+	if n == 0 {
+		return "No line of old is in the file. Read the file again and copy the text exactly."
+	}
+	from := max(0, best-2)
+	to := min(len(lines), best+len(want)+2, from+60)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d of the %d lines of old match. The closest part of the file is lines %d-%d:\n", n, len(want), from+1, to)
+	for i := from; i < to; i++ {
+		fmt.Fprintf(&b, "%d\t%s\n", i+1, lines[i])
+	}
+	b.WriteString("Copy old from these lines, without the line numbers.")
+	return b.String()
+}
+
+// filesWith lists the files under the working directory that contain old.
+func (t *Tools) filesWith(ctx context.Context, old string) []string {
+	var cands []string
+	cmd := exec.CommandContext(ctx, "git", "ls-files", "-co", "--exclude-standard")
+	cmd.Dir = t.Cwd
+	if out, err := cmd.Output(); err == nil {
+		cands = strings.Split(strings.TrimSpace(string(out)), "\n")
+	} else {
+		filepath.WalkDir(t.Cwd, func(p string, d os.DirEntry, err error) error {
+			if err != nil || len(cands) > 20000 {
+				return filepath.SkipDir
+			}
+			if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "build" || d.Name() == "target") {
+				return filepath.SkipDir
+			}
+			if !d.IsDir() {
+				rel, _ := filepath.Rel(t.Cwd, p)
+				cands = append(cands, rel)
+			}
+			return nil
+		})
+	}
+	var out []string
+	for _, c := range cands {
+		if c == "" {
+			continue
+		}
+		st, err := os.Stat(filepath.Join(t.Cwd, c))
+		if err != nil || st.IsDir() || st.Size() > 2<<20 {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(t.Cwd, c))
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(b), old) {
+			out = append(out, c)
+		} else if _, ok := looseFind(string(b), old); ok {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func lineNums(src, sub string) string {

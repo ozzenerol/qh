@@ -255,8 +255,16 @@ func statLine(st *Stats) string {
 	if st.Secs > 0 {
 		tps = float64(st.Output) / st.Secs
 	}
-	return fmt.Sprintf("%s: %d steps, %d tokens out, %.0fs (%.1f tok/s overall), context %d tokens",
-		st.Model, st.Steps, st.Output, st.Secs, tps, st.Prompt)
+	line := fmt.Sprintf("%s: %d steps, %d tool errors, %d tokens out, %.0fs (%.1f tok/s overall), context %d tokens",
+		st.Model, st.Steps, st.ToolErrs, st.Output, st.Secs, tps, st.Prompt)
+	if st.Window > 0 {
+		pct := st.Prompt * 100 / st.Window
+		line += fmt.Sprintf(" (%d%% of %d)", pct, st.Window)
+		if pct >= 60 {
+			line += "; the session is getting big: start a new one or run qh compact -s NAME"
+		}
+	}
+	return line
 }
 
 // stream sends a run and prints its events until done. Ctrl+C cancels it.
@@ -320,6 +328,7 @@ func runCmd(args []string) error {
 		req.Think = &f
 	}
 	v := &view{out: os.Stdout, log: os.Stderr, color: isTTY(os.Stderr), quiet: *quiet}
+	fmt.Fprintln(os.Stderr, "qh: session "+*name)
 	if *timeout > 0 {
 		// Exit closes the connection, and the daemon cancels the run.
 		time.AfterFunc(*timeout, func() {
@@ -388,6 +397,7 @@ func chat(args []string) error {
 	name := fs.String("s", "", "session")
 	cont := fs.Bool("c", false, "continue the latest session of this folder")
 	resume := fs.Bool("r", false, "pick a session to resume (or give its name)")
+	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	fs.Parse(args)
 	pick := false
 	named := false
