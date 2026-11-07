@@ -19,6 +19,7 @@ var slashCmds = []slashCmd{
 	{"/new", "clear this session and start over"},
 	{"/resume", "switch to another session"},
 	{"/sessions", "list the saved sessions"},
+	{"/compact", "summarize the conversation to free context"},
 	{"/think on", "Qwen thinks before it answers"},
 	{"/think off", "answer at once, faster and less careful"},
 	{"/clear", "clear the screen"},
@@ -37,6 +38,7 @@ func helpLines() []string {
 		{"↑ ↓", "history"},
 		{"/", "commands"},
 		{"ctrl+t", "show or hide the thinking"},
+		{"ctrl+o", "show the last compaction summary"},
 		{"ctrl+l", "clear the screen"},
 		{"ctrl+c ×2", "quit"},
 	} {
@@ -110,10 +112,13 @@ type tui struct {
 	showThink bool
 	frame     int
 
-	model  string
-	ctx    int
-	lastTS string
-	notice string
+	model       string
+	ctx         int
+	window      int
+	compacting  bool
+	lastSummary string
+	lastTS      string
+	notice      string
 
 	picker     *picker
 	gen        int
@@ -163,8 +168,8 @@ func (t *tui) label(from string) string {
 	switch {
 	case from == t.me || from == "":
 		return ""
-	case strings.HasPrefix(from, "chat:"):
-		return "chat"
+	case strings.HasPrefix(from, "chat:"), from == "chat":
+		return "" // the user, in this or an earlier chat window
 	case from == "qh run":
 		return "run"
 	}
@@ -335,14 +340,34 @@ func (t *tui) event(e Event) {
 	case "done":
 		t.endMessage()
 		t.running, t.tool = false, ""
+		t.compacting = false
 		if st := e.Stats; st != nil {
 			t.model, t.ctx = st.Model, st.Prompt
+			if st.Window > 0 {
+				t.window = st.Window
+			}
 			tps := 0.0
 			if st.Secs > 0 {
 				tps = float64(st.Output) / st.Secs
 			}
 			t.lastTS = fmt.Sprintf("%.0fs · %.0f tok/s", st.Secs, tps)
 		}
+	case "compacting":
+		t.endMessage()
+		t.compacting = true
+		if !t.running {
+			t.running, t.runStart, t.tool = true, time.Now(), ""
+		}
+	case "compacted":
+		t.compacting = false
+		t.lastSummary = e.Text
+		if e.Replay {
+			t.print("", cGray+"✻ Earlier messages were compacted · ctrl+o shows the summary")
+			return
+		}
+		t.print("", cAccent+"✻ "+cReset+cBold+"Conversation compacted"+cReset+cGray+
+			fmt.Sprintf(" (~%s → ~%s tokens · ctrl+o shows the summary)", human(e.Before), human(e.After)))
+		t.ctx = e.After
 	case "attached":
 		t.attached = true
 		if e.OK {
@@ -389,7 +414,9 @@ func (t *tui) draw() {
 	if t.running {
 		secs := int(time.Since(t.runStart).Seconds())
 		verb := "Thinking"
-		if t.tool != "" {
+		if t.compacting {
+			verb = "Compacting the conversation"
+		} else if t.tool != "" {
 			verb = "Running " + t.tool + cAccent
 		} else if t.textPart != "" || t.inMsg {
 			verb = "Writing"
@@ -464,6 +491,9 @@ func (t *tui) draw() {
 		right = strings.TrimSuffix(t.model, "-8bit")
 		right = strings.TrimSuffix(right, "-5bit")
 		right += " · ctx " + human(t.ctx)
+		if t.window > 0 {
+			right += fmt.Sprintf("/%s (%d%%)", human(t.window), t.ctx*100/t.window)
+		}
 		if t.lastTS != "" {
 			right += " · " + t.lastTS
 		}
@@ -780,6 +810,19 @@ func (t *tui) key(r rune) uiAction {
 	case 0x0c:
 		t.erase()
 		t.w("\x1b[2J\x1b[H")
+	case 0x0f:
+		if t.lastSummary == "" {
+			t.notice = "no compaction summary in this session"
+			break
+		}
+		md := mdState{}
+		lines := []string{"", cAccent + cBold + "Summary" + cReset}
+		for _, l := range strings.Split(t.lastSummary, "\n") {
+			for _, wl := range wrap(md.line(l), t.width-3) {
+				lines = append(lines, "  "+wl)
+			}
+		}
+		t.print(lines...)
 	case 0x14:
 		t.showThink = !t.showThink
 		t.notice = "thinking " + map[bool]string{true: "shown", false: "hidden"}[t.showThink]
@@ -881,6 +924,19 @@ func listSessionsReq() []SessionInfo {
 	return rows
 }
 
+func nonEmpty(rows []SessionInfo) []SessionInfo {
+	var out []SessionInfo
+	for _, r := range rows {
+		if r.Msgs > 0 {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// newSessionName names a fresh chat session after the time it started.
+func newSessionName() string { return time.Now().Format("0102-150405") }
+
 // latestSession is the newest session of cwd, or the newest one at all.
 func latestSession(cwd string) string {
 	rows := listSessionsReq()
@@ -889,10 +945,12 @@ func latestSession(cwd string) string {
 			return r.Name
 		}
 	}
-	if len(rows) > 0 {
-		return rows[0].Name
+	for _, r := range rows {
+		if r.Msgs > 0 {
+			return r.Name
+		}
 	}
-	return "main"
+	return newSessionName()
 }
 
 // the loop --------------------------------------------------------------------
@@ -915,7 +973,7 @@ func (t *tui) switchTo(name string, events chan genEvent) {
 	t.erase()
 	t.w("\x1b[2J\x1b[H")
 	t.header()
-	go attachLoop(name, t.cwd, t.gen, events, t.stopAttach)
+	go attachLoop(name, t.cwd, t.me, t.gen, events, t.stopAttach)
 }
 
 func chatTUI(session string, pick bool) error {
@@ -953,7 +1011,7 @@ func chatTUI(session string, pick bool) error {
 	events := make(chan genEvent, 1024)
 	quitOnPickerEsc := false
 	if pick {
-		t.picker = &picker{rows: listSessionsReq()}
+		t.picker = &picker{rows: nonEmpty(listSessionsReq())}
 		quitOnPickerEsc = true
 	} else {
 		t.switchTo(session, events)
@@ -1079,12 +1137,16 @@ func (t *tui) submit() bool {
 		t.header()
 		t.ctx, t.lastTS = 0, ""
 		return false
+	case text == "/compact" || strings.HasPrefix(text, "/compact "):
+		focus := strings.TrimSpace(strings.TrimPrefix(text, "/compact"))
+		go simpleQuiet(ClientReq{Op: "compact", Session: t.session, Cwd: t.cwd, Prompt: focus, From: t.me, Detach: true})
+		return false
 	case text == "/resume":
 		if t.running {
 			t.notice = "a run is active; stop it first (esc)"
 			return false
 		}
-		t.picker = &picker{rows: listSessionsReq()}
+		t.picker = &picker{rows: nonEmpty(listSessionsReq())}
 		return false
 	case text == "/sessions":
 		c, dec, err := send(ClientReq{Op: "sessions"})
@@ -1135,10 +1197,10 @@ func simpleQuiet(req ClientReq) error {
 
 // attachLoop keeps an attach connection open and passes its events on. When
 // the daemon goes away it says so and connects again. stop ends it.
-func attachLoop(session, cwd string, gen int, out chan<- genEvent, stop <-chan struct{}) {
+func attachLoop(session, cwd, from string, gen int, out chan<- genEvent, stop <-chan struct{}) {
 	first := true
 	for {
-		c, dec, err := send(ClientReq{Op: "attach", Session: session, Cwd: cwd})
+		c, dec, err := send(ClientReq{Op: "attach", Session: session, Cwd: cwd, From: from})
 		if err == nil {
 			go func() {
 				<-stop

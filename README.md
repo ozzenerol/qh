@@ -38,9 +38,10 @@ qh run "the parser tests fail since the last commit; find out why and fix it"
 qh run -s lexer -C ~/src/iris -new "add a test for the new duration literals"
 echo "long task text" | qh run -
 qh run -ro -timeout 10m "where is the config file parsed?"
-qh                # chat in this directory, session "main"
+qh                # chat in this directory, in a new session
 qh -c             # continue the newest session of this directory
 qh -r             # pick a session to resume
+qh compact -s lexer "keep the test names"
 qh sessions
 qh reset -s lexer
 qh stop
@@ -48,11 +49,15 @@ qh stop
 
 `qh run` prints the final report on stdout. Each tool call is one line on stderr, and the last line has the step count, tokens and time. Ctrl+C cancels the run, and so does `-timeout` (exit code 124); the daemon then kills the running command.
 
-The chat shows every run on its session, from any client. When Claude runs `qh run -s main -from opus "..."`, the open chat prints the message with an `opus` label and streams the answer. Messages that arrive during a run wait in a queue, and the chat shows them as queued. Esc or Ctrl+C stops the run that is active, whoever started it.
+The chat shows every run on its session, from any client. The session name `@chat` means the chat that is open in a terminal (the newest one, if there are several). When Claude runs `qh run -s @chat -from opus "..."`, the open chat prints the message with an `opus` label and streams the answer. Messages that arrive during a run wait in a queue, and the chat shows them as queued. Esc or Ctrl+C stops the run that is active, whoever started it.
 
 In the chat, Enter sends and Ctrl+J starts a new line (pasted text keeps its lines). Up and Down walk the history, Ctrl+T shows the thinking, and Ctrl+C twice quits. Type `/` for the command menu (`/new`, `/resume`, `/think on|off`, `/sessions`, `/clear`, `/exit`); ↑↓ picks one, Tab completes, Enter runs it. Without a terminal (a pipe, or `TERM=dumb`) qh uses a plain line chat.
 
-Sessions are saved in `~/.qh/sessions/NAME.json`, so they survive a daemon restart.
+Sessions are saved in `~/.qh/sessions/NAME.json`, so they survive a daemon restart. A chat started with plain `qh` gets a new session named after the time (`1108-013105`); `qh run` uses `main` unless you give `-s`.
+
+## Compaction
+
+When a request passes 80% of `context` (262144 tokens by default), qh asks the model for a summary of the conversation and replaces the messages with it. This happens before a new prompt, or between two steps of a run; in the second case the model gets "continue the task from the summary". `/compact [focus]` in the chat, or `qh compact -s NAME [focus]`, does it by hand. The summary request is the normal prompt plus one question, so the server reads the whole conversation from its cache and only writes the summary. The old messages go to `~/.qh/sessions/archive/`. In the chat, Ctrl+O shows the last summary.
 
 I use it with Claude Code as the coordinator. Claude writes the task, runs `qh run -s NAME "..."` and reads the report, then checks the diff itself. A second `qh run -s NAME` continues the same session, so a correction does not need the whole brief again.
 
@@ -68,11 +73,13 @@ On a small test (one failing Python test, Qwen3.6-35B-A3B on an M3 Max), qh fixe
   "model": "",
   "max_steps": 80,
   "max_tokens": 16384,
-  "think_budget": 30000
+  "think_budget": 30000,
+  "context": 262144,
+  "compact_at": 0
 }
 ```
 
-An empty `model` means the first model the server lists. `QH_URL`, `QH_MODEL`, `QH_HOME` and `QH_SOCK` override the file.
+An empty `model` means the first model the server lists. `compact_at` 0 means 80% of `context`. `QH_URL`, `QH_MODEL`, `QH_HOME` and `QH_SOCK` override the file.
 
 The system prompt is about 150 words. qh adds `~/.qh/AGENTS.md`, then `AGENTS.md` (or `CLAUDE.md` when a directory has no `AGENTS.md`) from `/` down to the working directory.
 

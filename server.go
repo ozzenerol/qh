@@ -24,6 +24,8 @@ type Config struct {
 	MaxSteps    int    `json:"max_steps"`
 	MaxTokens   int    `json:"max_tokens"`
 	ThinkBudget int    `json:"think_budget"` // chars of thinking in one step
+	Context     int    `json:"context"`      // the model's context window in tokens
+	CompactAt   int    `json:"compact_at"`   // compact when a request passes this; 0 means 80% of context
 }
 
 func qhDir() (string, error) {
@@ -46,7 +48,7 @@ func sockPath() string {
 }
 
 func loadConfig() Config {
-	c := Config{URL: "http://127.0.0.1:8080/v1", MaxSteps: 80, MaxTokens: 16384, ThinkBudget: 30000}
+	c := Config{URL: "http://127.0.0.1:8080/v1", MaxSteps: 80, MaxTokens: 16384, ThinkBudget: 30000, Context: 262144}
 	if d, err := qhDir(); err == nil {
 		if b, err := os.ReadFile(filepath.Join(d, "config.json")); err == nil {
 			if err := json.Unmarshal(b, &c); err != nil {
@@ -68,8 +70,9 @@ func loadConfig() Config {
 type ClientReq struct {
 	Op       string `json:"op"` // run, attach, cancel, set, reset, sessions, ping, stop
 	Session  string `json:"session,omitempty"`
-	From     string `json:"from,omitempty"`   // label shown to watchers, e.g. "opus"
-	Detach   bool   `json:"detach,omitempty"` // run: answer at once; events go to watchers only
+	From     string `json:"from,omitempty"`    // label shown to watchers, e.g. "opus"
+	Detach   bool   `json:"detach,omitempty"`  // run: answer at once; events go to watchers only
+	Compact  bool   `json:"compact,omitempty"` // run: compact the session; Prompt is the focus
 	Cwd      string `json:"cwd,omitempty"`
 	Prompt   string `json:"prompt,omitempty"`
 	New      bool   `json:"new,omitempty"`
@@ -77,10 +80,13 @@ type ClientReq struct {
 	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
+type chatReg struct{ from, session string }
+
 type Server struct {
 	cfg      Config
 	mu       sync.Mutex
 	sessions map[string]*Session
+	chats    []chatReg // open terminal chats, the newest last
 	stop     chan struct{}
 }
 
@@ -185,6 +191,17 @@ func (s *Server) handle(c net.Conn) {
 	if req.Session == "" {
 		req.Session = "main"
 	}
+	if req.Session == "@chat" {
+		s.mu.Lock()
+		if n := len(s.chats); n > 0 {
+			req.Session = s.chats[n-1].session
+		}
+		s.mu.Unlock()
+		if req.Session == "@chat" {
+			emit(Event{T: "error", Text: "no chat is open; start qh in a terminal first"})
+			return
+		}
+	}
 
 	switch req.Op {
 	case "ping":
@@ -228,6 +245,12 @@ func (s *Server) handle(c net.Conn) {
 		}
 		emit(Event{T: "done", Text: fmt.Sprintf("thinking %s for %s", onOff(ss.Think), req.Session)})
 	case "run":
+		s.run(c, r, req, emit)
+	case "compact":
+		req.Compact = true
+		if req.Cwd == "" {
+			req.Cwd = "/"
+		}
 		s.run(c, r, req, emit)
 	case "attach":
 		s.attach(r, req, emit)
@@ -303,13 +326,13 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 	if req.New {
 		ss.Msgs = nil
 	}
-	ss.Cwd = req.Cwd
-	ss.ReadOnly = req.ReadOnly
+	if !req.Compact {
+		ss.Cwd = req.Cwd
+		ss.ReadOnly = req.ReadOnly
+	}
 	if req.Think != nil {
 		ss.Think = *req.Think
 	}
-	all(Event{T: "user", From: req.From, Text: req.Prompt})
-
 	llm := &LLM{BaseURL: s.cfg.URL, Model: s.cfg.Model, HTTP: &http.Client{}}
 	if err := llm.ResolveModel(ctx); err != nil {
 		all(Event{T: "error", Text: err.Error()})
@@ -317,6 +340,15 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 		return
 	}
 	a := &Agent{LLM: llm, Cfg: s.cfg}
+	if req.Compact {
+		if err := a.Compact(ctx, ss, req.Prompt, all); err != nil {
+			all(Event{T: "error", Text: err.Error()})
+		}
+		s.save(ss)
+		all(Event{T: "done", From: req.From, Stats: &Stats{Model: filepath.Base(llm.Model), Window: s.cfg.Context, Prompt: estimateTokens(ss.Msgs)}})
+		return
+	}
+	all(Event{T: "user", From: req.From, Text: req.Prompt})
 	st := a.Run(ctx, ss, req.Prompt, req.From, all)
 	s.save(ss)
 	final := ""
@@ -374,10 +406,23 @@ func (s *Server) attach(r *bufio.Reader, req ClientReq, emit func(Event)) {
 	ss.watchers[ch] = struct{}{}
 	running := ss.cancel != nil
 	ss.wmu.Unlock()
+	if strings.HasPrefix(req.From, "chat:") {
+		s.mu.Lock()
+		s.chats = append(s.chats, chatReg{req.From, req.Session})
+		s.mu.Unlock()
+	}
 	defer func() {
 		ss.wmu.Lock()
 		delete(ss.watchers, ch)
 		ss.wmu.Unlock()
+		s.mu.Lock()
+		for i := len(s.chats) - 1; i >= 0; i-- {
+			if s.chats[i].from == req.From && s.chats[i].session == req.Session {
+				s.chats = append(s.chats[:i], s.chats[i+1:]...)
+				break
+			}
+		}
+		s.mu.Unlock()
 	}()
 	for _, e := range hist {
 		emit(e)
@@ -400,8 +445,17 @@ func replay(msgs []Message) []Event {
 	for _, m := range msgs {
 		switch m.Role {
 		case "user":
+			if m.From == "compact" {
+				if strings.HasPrefix(m.Content, summaryHead) {
+					out = append(out, Event{T: "compacted", Text: strings.TrimPrefix(m.Content, summaryHead), Replay: true})
+				}
+				continue
+			}
 			out = append(out, Event{T: "user", From: m.From, Text: m.Content, Replay: true})
 		case "assistant":
+			if m.From == "compact" {
+				continue
+			}
 			if strings.TrimSpace(m.Content) != "" {
 				out = append(out, Event{T: "text", Text: strings.TrimSpace(m.Content), Replay: true})
 			}

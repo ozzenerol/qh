@@ -367,3 +367,105 @@ func TestWrapAndVisible(t *testing.T) {
 		t.Fatal("visible")
 	}
 }
+
+// compactModel: a tool call with a big prompt, then a summary, then an answer.
+type compactModel struct {
+	mu   sync.Mutex
+	reqs []map[string]any
+}
+
+func (m *compactModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/v1/models" {
+		fmt.Fprint(w, `{"data":[{"id":"/m/c"}]}`)
+		return
+	}
+	var body map[string]any
+	json.NewDecoder(r.Body).Decode(&body)
+	m.mu.Lock()
+	m.reqs = append(m.reqs, body)
+	m.mu.Unlock()
+	msgs := body["messages"].([]any)
+	last := msgs[len(msgs)-1].(map[string]any)
+	chunk := func(s string) { fmt.Fprintf(w, "data: %s\n\n", s) }
+	switch {
+	case strings.HasPrefix(fmt.Sprint(last["content"]), "Stop the task for a moment"):
+		chunk(`{"choices":[{"delta":{"content":"Goal: list files. Done: ran ls."}}]}`)
+	case last["role"] == "user" && fmt.Sprint(last["content"]) == "list files":
+		chunk(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"bash","arguments":"{\"command\":\"echo hi\"}"}}]}}]}`)
+		chunk(`{"choices":[],"usage":{"prompt_tokens":900,"completion_tokens":10}}`)
+	default:
+		chunk(`{"choices":[{"delta":{"content":"all done"}}]}`)
+		chunk(`{"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":3}}`)
+	}
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func TestAutoCompact(t *testing.T) {
+	fm := &compactModel{}
+	ts := httptest.NewServer(fm)
+	defer ts.Close()
+	home := t.TempDir()
+	t.Setenv("QH_HOME", home)
+	llm := &LLM{BaseURL: ts.URL + "/v1", HTTP: ts.Client()}
+	llm.ResolveModel(context.Background())
+	a := &Agent{LLM: llm, Cfg: Config{MaxSteps: 5, MaxTokens: 100, ThinkBudget: 1000, Context: 1000, CompactAt: 500}}
+	s := &Session{Name: "c1", Cwd: t.TempDir()}
+	var evs []string
+	a.Run(context.Background(), s, "list files", "you", func(e Event) {
+		if e.T == "compacting" || e.T == "compacted" || e.T == "tool" {
+			evs = append(evs, e.T)
+		}
+	})
+	if strings.Join(evs, ",") != "tool,compacting,compacted" {
+		t.Fatalf("events %v", evs)
+	}
+	if !strings.HasPrefix(s.Msgs[0].Content, summaryHead+"Goal: list files.") || s.Msgs[len(s.Msgs)-1].Content != "all done" {
+		t.Fatalf("msgs %+v", s.Msgs)
+	}
+	// the summary request starts with the same system prompt and tools as the steps
+	sys0 := fm.reqs[0]["messages"].([]any)[0].(map[string]any)["content"]
+	sys1 := fm.reqs[1]["messages"].([]any)[0].(map[string]any)["content"]
+	if sys0 != sys1 || fmt.Sprint(fm.reqs[0]["tools"]) != fmt.Sprint(fm.reqs[1]["tools"]) {
+		t.Fatal("the compaction request does not share the prefix")
+	}
+	if files, _ := filepath.Glob(filepath.Join(home, "sessions", "archive", "c1-*.json")); len(files) != 1 {
+		t.Fatal("no archive")
+	}
+	if got := replay(s.Msgs); got[0].T != "compacted" {
+		t.Fatalf("replay %+v", got[0])
+	}
+}
+
+func TestAtChat(t *testing.T) {
+	ts := httptest.NewServer(slowModel{delay: 10 * time.Millisecond})
+	defer ts.Close()
+	t.Setenv("QH_HOME", t.TempDir())
+	t.Setenv("QH_URL", ts.URL+"/v1")
+	done := make(chan error, 1)
+	go func() { done <- serve() }()
+	for i := 0; i < 50; i++ {
+		if _, err := os.Stat(sockPath()); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cwd := t.TempDir()
+	if err := simpleQuiet(ClientReq{Op: "run", Session: "@chat", Cwd: cwd, Prompt: "x"}); err == nil || !strings.Contains(err.Error(), "no chat") {
+		t.Fatalf("want no chat error, got %v", err)
+	}
+	ac, adec, _ := send(ClientReq{Op: "attach", Session: "1108-120000", Cwd: cwd, From: "chat:42"})
+	var e Event
+	adec.Decode(&e)
+	c, dec, _ := send(ClientReq{Op: "run", Session: "@chat", Cwd: cwd, Prompt: "hello", From: "opus"})
+	for dec.Decode(&e) == nil && e.T != "done" {
+	}
+	c.Close()
+	for adec.Decode(&e) == nil && e.T != "user" {
+	}
+	if e.From != "opus" || e.Text != "hello" {
+		t.Fatalf("chat got %+v", e)
+	}
+	ac.Close()
+	simple(ClientReq{Op: "stop"})
+	<-done
+}

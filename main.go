@@ -18,23 +18,25 @@ import (
 	"time"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 const usage = `qh: a coding agent for a local Qwen model
 
 usage:
-  qh [-s session]              chat in the terminal; shows every run on the session
+  qh                           chat in the terminal, in a new session
+  qh -s NAME                   chat in session NAME
   qh -c                        continue the latest session of this folder
   qh -r [name]                 pick a session to resume, or resume NAME
   qh run [flags] "task"        run one task and print the report (task "-" reads stdin)
   qh sessions                  list the sessions
+  qh compact [-s session] [focus]  replace the history with a summary
   qh reset [-s session]        clear a session
   qh serve                     run the daemon in the foreground
   qh stop                      stop the daemon
   qh status                    show if the daemon runs
 
 run flags:
-  -s name     session (default main)
+  -s name     session (default main; @chat is the chat that is open in a terminal)
   -C dir      working directory (default: the current one)
   -new        clear the session first
   -nothink    turn thinking off for this session
@@ -64,6 +66,11 @@ func main() {
 		err = serve()
 	case "sessions":
 		err = simple(ClientReq{Op: "sessions"})
+	case "compact":
+		fs := flag.NewFlagSet("compact", flag.ExitOnError)
+		name := fs.String("s", "main", "session")
+		fs.Parse(args)
+		err = compactCmd(*name, strings.Join(fs.Args(), " "))
 	case "reset":
 		fs := flag.NewFlagSet("reset", flag.ExitOnError)
 		name := fs.String("s", "main", "session")
@@ -331,6 +338,30 @@ func runCmd(args []string) error {
 	return nil
 }
 
+func compactCmd(session, focus string) error {
+	c, dec, err := send(ClientReq{Op: "compact", Session: session, Prompt: focus, From: os.Getenv("QH_FROM")})
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	for {
+		var e Event
+		if err := dec.Decode(&e); err != nil {
+			return errors.New("the daemon closed the connection")
+		}
+		switch e.T {
+		case "queued":
+			fmt.Fprintln(os.Stderr, "qh: waiting for the active run")
+		case "compacted":
+			fmt.Printf("compacted %s: ~%s -> ~%s tokens\n", session, human(e.Before), human(e.After))
+		case "error":
+			return errors.New(e.Text)
+		case "done":
+			return nil
+		}
+	}
+}
+
 func absDir(d string) (string, error) {
 	if d == "" {
 		return os.Getwd()
@@ -354,12 +385,16 @@ End a line with \ to write more lines. Ctrl+C stops a run.`
 
 func chat(args []string) error {
 	fs := flag.NewFlagSet("qh", flag.ExitOnError)
-	name := fs.String("s", "main", "session")
+	name := fs.String("s", "", "session")
 	cont := fs.Bool("c", false, "continue the latest session of this folder")
 	resume := fs.Bool("r", false, "pick a session to resume (or give its name)")
 	fs.Parse(args)
 	pick := false
+	named := false
+	fs.Visit(func(f *flag.Flag) { named = named || f.Name == "s" })
 	switch {
+	case !named && !*resume && !*cont:
+		*name = newSessionName() // like a new conversation; -c or -r brings an old one back
 	case *resume && fs.NArg() > 0:
 		*name = fs.Arg(0)
 	case *resume:

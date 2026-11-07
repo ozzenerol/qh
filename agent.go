@@ -14,12 +14,13 @@ import (
 )
 
 type Session struct {
-	Name     string     `json:"name"`
-	Cwd      string     `json:"cwd"`
-	Think    bool       `json:"think"`
-	ReadOnly bool       `json:"read_only"`
-	Msgs     []Message  `json:"messages"`
-	mu       sync.Mutex // held for the whole run
+	Name       string     `json:"name"`
+	Cwd        string     `json:"cwd"`
+	Think      bool       `json:"think"`
+	ReadOnly   bool       `json:"read_only"`
+	LastPrompt int        `json:"last_prompt"` // tokens of the last request
+	Msgs       []Message  `json:"messages"`
+	mu         sync.Mutex // held for the whole run
 
 	wmu      sync.Mutex // guards watchers and cancel
 	watchers map[chan Event]struct{}
@@ -62,6 +63,7 @@ type Stats struct {
 	Thinking int     `json:"thinking_chars"`
 	Secs     float64 `json:"secs"`
 	Retries  int     `json:"retries"`
+	Window   int     `json:"window"`
 }
 
 type Event struct {
@@ -69,6 +71,8 @@ type Event struct {
 	From   string `json:"from,omitempty"`
 	Replay bool   `json:"replay,omitempty"`
 	Text   string `json:"text,omitempty"`
+	Before int    `json:"before,omitempty"` // compaction: tokens before and after
+	After  int    `json:"after,omitempty"`
 	Tool   string `json:"tool,omitempty"`
 	OK     bool   `json:"ok,omitempty"`
 	Stats  *Stats `json:"stats,omitempty"`
@@ -158,7 +162,12 @@ func looping(s string) bool {
 
 func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit func(Event)) Stats {
 	t0 := time.Now()
-	st := Stats{Model: filepath.Base(a.LLM.Model)}
+	st := Stats{Model: filepath.Base(a.LLM.Model), Window: a.Cfg.Context}
+	if s.LastPrompt > a.compactAt() {
+		if err := a.Compact(ctx, s, "", emit); err != nil {
+			emit(Event{T: "error", Text: "compaction failed: " + err.Error()})
+		}
+	}
 	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly}
 	schemas := toolSchemas(s.ReadOnly)
 	system := Message{Role: "system", Content: buildSystem(s.Cwd, s.ReadOnly)}
@@ -218,6 +227,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		}
 		st.Prompt, st.Cached = u.PromptTokens, u.Details.CachedTokens
 		st.Output += u.CompletionTokens
+		s.LastPrompt = u.PromptTokens + u.CompletionTokens
 		s.Msgs = append(s.Msgs, msg)
 		if len(msg.ToolCalls) == 0 {
 			break
@@ -239,6 +249,14 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		if ctx.Err() != nil {
 			emit(Event{T: "info", Text: "interrupted"})
 			break
+		}
+		if s.LastPrompt > a.compactAt() {
+			if err := a.Compact(ctx, s, "the task that is in progress now", emit); err != nil {
+				emit(Event{T: "error", Text: "compaction failed: " + err.Error()})
+				break
+			}
+			s.Msgs = append(s.Msgs, Message{Role: "user", From: "compact",
+				Content: "Continue the task from the summary. Check the files before you change them again."})
 		}
 	}
 	if st.Steps >= a.Cfg.MaxSteps {
