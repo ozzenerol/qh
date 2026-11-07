@@ -36,6 +36,8 @@ run flags:
   -C dir      working directory (default: the current one)
   -new        clear the session first
   -nothink    turn thinking off for this session
+  -ro         read-only run: the tools are read, grep and ls
+  -timeout d  cancel the run after d (for example 15m) and exit with 124
   -q          print only the report
 
 The daemon listens on ~/.qh/qh.sock and starts on the first call.
@@ -286,6 +288,8 @@ func runCmd(args []string) error {
 	fresh := fs.Bool("new", false, "clear the session first")
 	nothink := fs.Bool("nothink", false, "thinking off")
 	quiet := fs.Bool("q", false, "print only the report")
+	ro := fs.Bool("ro", false, "read-only: the tools are read, grep and ls")
+	timeout := fs.Duration("timeout", 0, "cancel the run after this long, for example 15m")
 	fs.Parse(args)
 	task := strings.Join(fs.Args(), " ")
 	if task == "-" {
@@ -302,12 +306,19 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	req := ClientReq{Op: "run", Session: *name, Cwd: cwd, Prompt: task, New: *fresh}
+	req := ClientReq{Op: "run", Session: *name, Cwd: cwd, Prompt: task, New: *fresh, ReadOnly: *ro}
 	if *nothink {
 		f := false
 		req.Think = &f
 	}
 	v := &view{out: os.Stdout, log: os.Stderr, color: isTTY(os.Stderr), quiet: *quiet}
+	if *timeout > 0 {
+		// Exit closes the connection, and the daemon cancels the run.
+		time.AfterFunc(*timeout, func() {
+			fmt.Fprintf(os.Stderr, "qh: timed out after %s\n", *timeout)
+			os.Exit(124)
+		})
+	}
 	e, err := stream(req, v)
 	if err != nil {
 		return err

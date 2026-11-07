@@ -14,11 +14,12 @@ import (
 )
 
 type Session struct {
-	Name  string    `json:"name"`
-	Cwd   string    `json:"cwd"`
-	Think bool      `json:"think"`
-	Msgs  []Message `json:"messages"`
-	mu    sync.Mutex
+	Name     string    `json:"name"`
+	Cwd      string    `json:"cwd"`
+	Think    bool      `json:"think"`
+	ReadOnly bool      `json:"read_only"`
+	Msgs     []Message `json:"messages"`
+	mu       sync.Mutex
 }
 
 type Stats struct {
@@ -53,8 +54,18 @@ Use edit for small changes and write for new files. In edit, copy old exactly fr
 Do not ask for permission. Do the task.
 When you finish, reply with a short report: the files you changed, and the result of the last build or test. If you could not finish, say what is left.`
 
-func buildSystem(cwd string) string {
-	s := fmt.Sprintf(systemPrompt, cwd, runtime.GOOS)
+const systemPromptRO = `You are a coding agent in a read-only run. You work in %s on %s. Your tools are read, grep and ls. You cannot change files or run commands.
+
+Find the facts with grep and ls, then read the parts that matter. Quote file paths and line numbers for each claim.
+Do not ask for permission. Do the task.
+When you finish, reply with the answer, then list the files you read.`
+
+func buildSystem(cwd string, readOnly bool) string {
+	tmpl := systemPrompt
+	if readOnly {
+		tmpl = systemPromptRO
+	}
+	s := fmt.Sprintf(tmpl, cwd, runtime.GOOS)
 	for _, f := range contextFiles(cwd) {
 		b, err := os.ReadFile(f)
 		if err != nil || len(strings.TrimSpace(string(b))) == 0 {
@@ -115,9 +126,9 @@ func looping(s string) bool {
 func (a *Agent) Run(ctx context.Context, s *Session, prompt string, emit func(Event)) Stats {
 	t0 := time.Now()
 	st := Stats{Model: filepath.Base(a.LLM.Model)}
-	tools := &Tools{Cwd: s.Cwd}
-	schemas := toolSchemas()
-	system := Message{Role: "system", Content: buildSystem(s.Cwd)}
+	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly}
+	schemas := toolSchemas(s.ReadOnly)
+	system := Message{Role: "system", Content: buildSystem(s.Cwd, s.ReadOnly)}
 	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt})
 	seen := map[string]int{}
 
@@ -222,8 +233,17 @@ func argSummary(name, raw string) string {
 			s += fmt.Sprintf(" @%v", o)
 		}
 		return s
-	case "edit", "write":
+	case "edit", "write", "ls":
 		return str("path")
+	case "grep":
+		s := str("pattern")
+		if p := str("path"); p != "" {
+			s += " in " + p
+		}
+		if g := str("glob"); g != "" {
+			s += " (" + g + ")"
+		}
+		return s
 	}
 	return oneLine(raw, 160)
 }

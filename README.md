@@ -16,7 +16,7 @@ What qh does:
 
 - It sends the thinking back as `reasoning_content` and sets `preserve_thinking`. Each request is then the previous prompt plus new messages, which is what the server's prompt cache can reuse. (The Qwen 3.5+ models have linear-attention layers; their cache can't be trimmed, so a prompt that differs in the middle is processed again from that point.)
 - When the thinking repeats itself or passes `think_budget` characters, qh stops the step and asks again with thinking off.
-- There are four tools: read, write, edit and bash. edit takes one `old`/`new` pair. It still matches when the model copies the line numbers from read or drops trailing spaces.
+- There are four tools: read, write, edit and bash. edit takes one `old`/`new` pair. It still matches when the model copies the line numbers from read or drops trailing spaces. A read-only run (`-ro`) gets read, grep and ls, and no shell.
 - If the server leaves a `<tool_call>` block in the text, qh parses it.
 - The third identical tool call gets a note that the result will not change.
 - Tool output longer than 12000 characters is cut in the middle. The end is kept, since errors are usually there.
@@ -35,19 +35,22 @@ or clone the repo and run `go build`.
 qh run "the parser tests fail since the last commit; find out why and fix it"
 qh run -s lexer -C ~/src/iris -new "add a test for the new duration literals"
 echo "long task text" | qh run -
+qh run -ro -timeout 10m "where is the config file parsed?"
 qh                # chat in this directory, session "main"
 qh sessions
 qh reset -s lexer
 qh stop
 ```
 
-`qh run` prints the final report on stdout. Each tool call is one line on stderr, and the last line has the step count, tokens and time. Ctrl+C cancels the run; the daemon kills the running command.
+`qh run` prints the final report on stdout. Each tool call is one line on stderr, and the last line has the step count, tokens and time. Ctrl+C cancels the run, and so does `-timeout` (exit code 124); the daemon then kills the running command.
 
 Chat commands: `/new`, `/think on|off`, `/sessions`, `/exit`. End a line with `\` to keep typing. The thinking is hidden, and a counter shows its length while it runs.
 
 Sessions are saved in `~/.qh/sessions/NAME.json`, so they survive a daemon restart.
 
-I use it with Claude Code as the coordinator. Claude writes the task, runs `qh run -s NAME "..."` and reads the report, then checks the diff itself.
+I use it with Claude Code as the coordinator. Claude writes the task, runs `qh run -s NAME "..."` and reads the report, then checks the diff itself. A second `qh run -s NAME` continues the same session, so a correction does not need the whole brief again.
+
+On a small test (one failing Python test, Qwen3.6-35B-A3B on an M3 Max), qh fixed it in 9.6 s and pi in 11.7 s. That is one run each, not a benchmark.
 
 ## Config
 

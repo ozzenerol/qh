@@ -66,12 +66,13 @@ func loadConfig() Config {
 
 // ClientReq is one line of JSON that a client sends after it connects.
 type ClientReq struct {
-	Op      string `json:"op"` // run, set, reset, sessions, ping, stop
-	Session string `json:"session,omitempty"`
-	Cwd     string `json:"cwd,omitempty"`
-	Prompt  string `json:"prompt,omitempty"`
-	New     bool   `json:"new,omitempty"`
-	Think   *bool  `json:"think,omitempty"`
+	Op       string `json:"op"` // run, set, reset, sessions, ping, stop
+	Session  string `json:"session,omitempty"`
+	Cwd      string `json:"cwd,omitempty"`
+	Prompt   string `json:"prompt,omitempty"`
+	New      bool   `json:"new,omitempty"`
+	Think    *bool  `json:"think,omitempty"`
+	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
 type Server struct {
@@ -247,6 +248,7 @@ func (s *Server) run(c net.Conn, r *bufio.Reader, req ClientReq, emit func(Event
 		ss.Msgs = nil
 	}
 	ss.Cwd = req.Cwd
+	ss.ReadOnly = req.ReadOnly
 	if req.Think != nil {
 		ss.Think = *req.Think
 	}

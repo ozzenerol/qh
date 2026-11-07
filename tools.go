@@ -19,7 +19,7 @@ const (
 	readDefault = 400   // lines that read returns without a limit
 )
 
-func toolSchemas() []map[string]any {
+func toolSchemas(readOnly bool) []map[string]any {
 	fn := func(name, desc string, props map[string]any, req ...string) map[string]any {
 		return map[string]any{"type": "function", "function": map[string]any{
 			"name": name, "description": desc,
@@ -28,6 +28,17 @@ func toolSchemas() []map[string]any {
 	}
 	str := func(d string) map[string]any { return map[string]any{"type": "string", "description": d} }
 	num := func(d string) map[string]any { return map[string]any{"type": "integer", "description": d} }
+	read := fn("read", "Read a text file. Lines come back numbered. Use offset and limit for big files.",
+		map[string]any{"path": str("file path"), "offset": num("first line, 1-based"), "limit": num("number of lines")}, "path")
+	if readOnly {
+		return []map[string]any{read,
+			fn("grep", "Search files for a regular expression (grep -E). Returns file:line:text.",
+				map[string]any{"pattern": str("regular expression"), "path": str("file or directory, default ."),
+					"glob": str("only files that match, for example *.go")}, "pattern"),
+			fn("ls", "List a directory. Directories end with /.",
+				map[string]any{"path": str("directory, default .")}),
+		}
+	}
 	return []map[string]any{
 		fn("read", "Read a text file. Lines come back numbered. Use offset and limit for big files.",
 			map[string]any{"path": str("file path"), "offset": num("first line, 1-based"), "limit": num("number of lines")}, "path"),
@@ -42,7 +53,8 @@ func toolSchemas() []map[string]any {
 }
 
 type Tools struct {
-	Cwd string
+	Cwd      string
+	ReadOnly bool
 }
 
 func (t *Tools) path(p string) string {
@@ -96,7 +108,27 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		return ""
 	}
 
+	if t.ReadOnly && (name == "write" || name == "edit" || name == "bash") {
+		return "error: this is a read-only run; the tools are read, grep and ls", false
+	}
 	switch name {
+	case "grep":
+		if e := need("pattern"); e != "" {
+			return e, false
+		}
+		pat, _ := s("pattern")
+		p, ok := s("path")
+		if !ok || p == "" {
+			p = "."
+		}
+		g, _ := s("glob")
+		return t.grep(ctx, pat, t.path(p), g)
+	case "ls":
+		p, ok := s("path")
+		if !ok || p == "" {
+			p = "."
+		}
+		return t.ls(t.path(p))
 	case "read":
 		if e := need("path"); e != "" {
 			return e, false
@@ -137,7 +169,55 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		}
 		return t.bash(ctx, c, time.Duration(to)*time.Second)
 	}
+	if t.ReadOnly {
+		return fmt.Sprintf("error: unknown tool %q; the tools are read, grep and ls", name), false
+	}
 	return fmt.Sprintf("error: unknown tool %q; the tools are read, write, edit, bash", name), false
+}
+
+func (t *Tools) grep(ctx context.Context, pat, p, glob string) (string, bool) {
+	args := []string{"-rnIE", "--exclude-dir=.git", "--exclude-dir=node_modules"}
+	if glob != "" {
+		args = append(args, "--include="+glob)
+	}
+	args = append(args, "-e", pat, p)
+	cmd := exec.CommandContext(ctx, "grep", args...)
+	cmd.Dir = t.Cwd
+	out, err := cmd.CombinedOutput()
+	if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
+		return "no matches", true
+	}
+	if err != nil && len(out) == 0 {
+		return "error: " + err.Error(), false
+	}
+	res := string(out)
+	if prefix := t.Cwd + "/"; strings.Contains(res, prefix) {
+		res = strings.ReplaceAll(res, prefix, "")
+	}
+	return clip(res), err == nil
+}
+
+func (t *Tools) ls(p string) (string, bool) {
+	ents, err := os.ReadDir(p)
+	if err != nil {
+		return "error: " + err.Error(), false
+	}
+	var b strings.Builder
+	for i, e := range ents {
+		if i == 1000 {
+			fmt.Fprintf(&b, "[%d more]\n", len(ents)-i)
+			break
+		}
+		b.WriteString(e.Name())
+		if e.IsDir() {
+			b.WriteByte('/')
+		}
+		b.WriteByte('\n')
+	}
+	if b.Len() == 0 {
+		return "(empty)", true
+	}
+	return b.String(), true
 }
 
 func (t *Tools) read(fp string, off, limit int) (string, bool) {

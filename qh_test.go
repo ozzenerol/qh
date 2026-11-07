@@ -200,3 +200,26 @@ func TestDaemonSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReadOnlyTools(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "src"), 0o755)
+	os.WriteFile(filepath.Join(dir, "src", "a.go"), []byte("package a\nfunc Parse() {}\n"), 0o644)
+	tl := &Tools{Cwd: dir, ReadOnly: true}
+	ctx := context.Background()
+	if out, ok := tl.Run(ctx, "bash", `{"command":"touch x"}`); ok || !strings.Contains(out, "read-only") {
+		t.Fatalf("bash allowed: %s", out)
+	}
+	if out, ok := tl.Run(ctx, "grep", `{"pattern":"func Pa[a-z]+","glob":"*.go"}`); !ok || !strings.Contains(out, "src/a.go:2:func Parse") {
+		t.Fatalf("grep: %q", out)
+	}
+	if out, _ := tl.Run(ctx, "grep", `{"pattern":"nothing here"}`); out != "no matches" {
+		t.Fatalf("grep none: %q", out)
+	}
+	if out, ok := tl.Run(ctx, "ls", `{}`); !ok || out != "src/\n" {
+		t.Fatalf("ls: %q", out)
+	}
+	if len(toolSchemas(true)) != 3 || len(toolSchemas(false)) != 4 {
+		t.Fatal("schemas")
+	}
+}
