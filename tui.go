@@ -128,31 +128,78 @@ type tui struct {
 	sugSel int
 	sugFor string
 
+	fb      strings.Builder // the frame being built
+	lastKey string          // the live area at the last draw
+
 	liveRows  int // rows of the live area at the last draw
 	cursorRow int // row of the cursor inside the live area
 	attached  bool
 }
 
-func (t *tui) w(s string) { t.out.WriteString(s) }
+// w adds to the frame; flush sends the frame to the terminal in one write.
+func (t *tui) w(s string) { t.fb.WriteString(s) }
 
-// erase removes the live area (spinner, input box, status line).
-func (t *tui) erase() {
-	if t.liveRows == 0 {
+// flush writes the frame as one synchronized update (DEC mode 2026) with the
+// cursor hidden, so the terminal never shows a half-drawn screen.
+func (t *tui) flush() {
+	if t.fb.Len() == 0 {
 		return
 	}
-	if t.cursorRow > 0 {
-		t.w(fmt.Sprintf("\x1b[%dA", t.cursorRow))
+	t.out.WriteString("\x1b[?2026h\x1b[?25l" + t.fb.String() + "\x1b[?25h\x1b[?2026l")
+	t.fb.Reset()
+}
+
+// erase moves the cursor to the top of the live area. It does not clear it:
+// the next writes overwrite each line and clear what is left, so no blank
+// frame appears.
+func (t *tui) erase() {
+	if t.liveRows > 0 {
+		if t.cursorRow > 0 {
+			t.w(fmt.Sprintf("\x1b[%dA", t.cursorRow))
+		}
+		t.w("\r")
 	}
-	t.w("\r\x1b[J")
-	t.liveRows, t.cursorRow = 0, 0
+	t.liveRows, t.cursorRow, t.lastKey = 0, 0, ""
+}
+
+// clearLive removes the live area from the screen.
+func (t *tui) clearLive() {
+	t.erase()
+	t.w("\x1b[J")
 }
 
 // print writes lines above the live area.
 func (t *tui) print(lines ...string) {
 	t.erase()
 	for _, l := range lines {
-		t.w(l + cReset + "\n")
+		t.w(l + cReset + "\x1b[K\n")
 	}
+}
+
+// emitLive draws rows as the live area and puts the cursor at row cr,
+// column col. It writes nothing when the area did not change.
+func (t *tui) emitLive(rows []string, cr, col int) {
+	key := strings.Join(rows, "\n") + fmt.Sprintf("|%d|%d", cr, col)
+	if key == t.lastKey {
+		return
+	}
+	t.erase()
+	for i, r := range rows {
+		t.w(r + cReset + "\x1b[K")
+		if i < len(rows)-1 {
+			t.w("\n")
+		}
+	}
+	t.w("\x1b[J")
+	t.liveRows = len(rows)
+	if up := len(rows) - 1 - cr; up > 0 {
+		t.w(fmt.Sprintf("\x1b[%dA", up))
+	}
+	t.w("\r")
+	if col > 0 {
+		t.w(fmt.Sprintf("\x1b[%dC", col))
+	}
+	t.cursorRow, t.lastKey = cr, key
 }
 
 func displayName(s string) string {
@@ -386,16 +433,9 @@ func human(n int) string {
 
 // draw writes the live area: the spinner, the input box and the status line.
 func (t *tui) draw() {
-	t.erase()
 	if t.picker != nil {
 		rows := t.pickerRows()
-		for i, r := range rows {
-			t.w(r + cReset)
-			if i < len(rows)-1 {
-				t.w("\n")
-			}
-		}
-		t.liveRows, t.cursorRow = len(rows), len(rows)-1
+		t.emitLive(rows, len(rows)-1, 0)
 		return
 	}
 	var rows []string
@@ -505,10 +545,13 @@ func (t *tui) draw() {
 	if !t.attached {
 		right = "not connected"
 	}
-	gap := t.width - 1 - visible(left) - visible(right) - 2
-	status := left
-	if gap > 0 {
-		status += strings.Repeat(" ", gap) + right
+	// When both halves do not fit on one line, the right half (model, ctx,
+	// tok/s) gets its own line instead of being dropped.
+	status := []string{left}
+	if gap := t.width - 1 - visible(left) - visible(right) - 2; gap > 0 {
+		status[0] += strings.Repeat(" ", gap) + right
+	} else if right != "" {
+		status = append(status, "  "+right)
 	}
 	if sg := t.sugs(); len(sg) > 0 {
 		for i, c := range sg {
@@ -520,23 +563,12 @@ func (t *tui) draw() {
 			rows = append(rows, clipCols(name+pad+desc, t.width-1))
 		}
 	} else {
-		rows = append(rows, cGray+clipCols(status, t.width-1))
-	}
-
-	for i, r := range rows {
-		t.w(r + cReset)
-		if i < len(rows)-1 {
-			t.w("\n")
+		for _, l := range status {
+			rows = append(rows, cGray+clipCols(l, t.width-1))
 		}
 	}
-	t.liveRows = len(rows)
-	cr := top + 1 + curRow
-	up := len(rows) - 1 - cr
-	if up > 0 {
-		t.w(fmt.Sprintf("\x1b[%dA", up))
-	}
-	t.w(fmt.Sprintf("\r\x1b[%dC", 4+curCol))
-	t.cursorRow = cr
+
+	t.emitLive(rows, top+1+curRow, 4+curCol)
 }
 
 // clipLeft keeps the end of s, which is the useful part of a path.
@@ -837,7 +869,7 @@ func (t *tui) key(r rune) uiAction {
 		t.buf = append(t.buf[:s], t.buf[t.cur:]...)
 		t.cur = s
 	case 0x0c:
-		t.erase()
+		t.clearLive()
 		t.w("\x1b[2J\x1b[H")
 	case 0x0f:
 		if t.lastSummary == "" {
@@ -992,7 +1024,7 @@ func (t *tui) switchTo(name string, events chan genEvent) {
 	t.session = name
 	t.running, t.tool, t.textPart, t.thinkPart, t.inMsg, t.inThink = false, "", "", "", false, false
 	t.ctx, t.lastTS, t.attached = 0, "", false
-	t.erase()
+	t.clearLive()
 	t.w("\x1b[2J\x1b[H")
 	t.header()
 	go attachLoop(name, t.cwd, t.me, t.gen, events, t.stopAttach)
@@ -1012,8 +1044,9 @@ func chatTUI(session string, pick bool) error {
 		me: fmt.Sprintf("chat:%d", os.Getpid())}
 	t.w("\x1b[?2004h") // bracketed paste
 	defer func() {
-		t.erase()
+		t.clearLive()
 		t.w("\x1b[?2004l")
+		t.flush()
 		restore()
 		fmt.Println()
 	}()
@@ -1051,6 +1084,7 @@ func chatTUI(session string, pick bool) error {
 	}
 
 	t.draw()
+	t.flush()
 	for {
 		select {
 		case b, ok := <-keys:
@@ -1113,7 +1147,7 @@ func chatTUI(session string, pick bool) error {
 				t.notice = ""
 			}
 		case <-winch:
-			t.erase()
+			t.clearLive()
 			t.width = termWidth(int(os.Stdout.Fd()))
 		case <-tick.C:
 			if !t.running {
@@ -1122,6 +1156,7 @@ func chatTUI(session string, pick bool) error {
 			t.frame++
 		}
 		t.draw()
+		t.flush()
 	}
 }
 
@@ -1142,7 +1177,7 @@ func (t *tui) submit() bool {
 		t.print(helpLines()...)
 		return false
 	case text == "/clear":
-		t.erase()
+		t.clearLive()
 		t.w("\x1b[2J\x1b[H")
 		return false
 	case text == "/new":
@@ -1154,7 +1189,7 @@ func (t *tui) submit() bool {
 			t.print(cRed + "  ⎿  " + err.Error())
 			return false
 		}
-		t.erase()
+		t.clearLive()
 		t.w("\x1b[2J\x1b[H")
 		t.header()
 		t.ctx, t.lastTS = 0, ""
