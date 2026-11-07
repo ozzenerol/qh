@@ -28,6 +28,7 @@ type Message struct {
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
 	Name             string     `json:"name,omitempty"`
+	From             string     `json:"from,omitempty"` // who sent a user message; not sent to the model
 }
 
 type Usage struct {
@@ -92,7 +93,7 @@ func (l *LLM) ResolveModel(ctx context.Context) error {
 func (l *LLM) Chat(ctx context.Context, r Request, onDelta func(Delta) bool) (Message, Usage, error) {
 	body := map[string]any{
 		"model":          l.Model,
-		"messages":       r.Messages,
+		"messages":       wire(r.Messages),
 		"stream":         true,
 		"stream_options": map[string]any{"include_usage": true},
 		"max_tokens":     r.MaxTok,
@@ -273,4 +274,14 @@ func parseTextToolCalls(s string) (string, []ToolCall) {
 		return s, nil
 	}
 	return strings.TrimSpace(s[:i]), calls
+}
+
+// wire drops the fields that only qh uses.
+func wire(ms []Message) []Message {
+	out := make([]Message, len(ms))
+	for i, m := range ms {
+		m.From = ""
+		out[i] = m
+	}
+	return out
 }

@@ -66,8 +66,10 @@ func loadConfig() Config {
 
 // ClientReq is one line of JSON that a client sends after it connects.
 type ClientReq struct {
-	Op       string `json:"op"` // run, set, reset, sessions, ping, stop
+	Op       string `json:"op"` // run, attach, cancel, set, reset, sessions, ping, stop
 	Session  string `json:"session,omitempty"`
+	From     string `json:"from,omitempty"`   // label shown to watchers, e.g. "opus"
+	Detach   bool   `json:"detach,omitempty"` // run: answer at once; events go to watchers only
 	Cwd      string `json:"cwd,omitempty"`
 	Prompt   string `json:"prompt,omitempty"`
 	New      bool   `json:"new,omitempty"`
@@ -192,6 +194,9 @@ func (s *Server) handle(c net.Conn) {
 		close(s.stop)
 	case "sessions":
 		s.listSessions(emit)
+	case "list":
+		b, _ := json.Marshal(sessionList())
+		emit(Event{T: "done", Text: string(b)})
 	case "reset":
 		ss, err := s.session(req.Session, req.Cwd)
 		if err != nil {
@@ -224,6 +229,19 @@ func (s *Server) handle(c net.Conn) {
 		emit(Event{T: "done", Text: fmt.Sprintf("thinking %s for %s", onOff(ss.Think), req.Session)})
 	case "run":
 		s.run(c, r, req, emit)
+	case "attach":
+		s.attach(r, req, emit)
+	case "cancel":
+		ss, err := s.session(req.Session, req.Cwd)
+		if err != nil {
+			emit(Event{T: "error", Text: err.Error()})
+			return
+		}
+		if ss.cancelRun() {
+			emit(Event{T: "done", Text: "cancelled"})
+		} else {
+			emit(Event{T: "done", Text: "nothing runs"})
+		}
 	default:
 		emit(Event{T: "error", Text: "unknown op " + req.Op})
 	}
@@ -239,21 +257,18 @@ func (s *Server) run(c net.Conn, r *bufio.Reader, req ClientReq, emit func(Event
 		emit(Event{T: "error", Text: err.Error()})
 		return
 	}
-	if !ss.mu.TryLock() {
-		emit(Event{T: "error", Text: "session " + req.Session + " is busy"})
+	if req.From == "" {
+		req.From = "qh run"
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if req.Detach {
+		emit(Event{T: "done", Text: "accepted"})
+		go func() {
+			defer cancel()
+			s.execRun(ctx, cancel, ss, req, func(Event) {})
+		}()
 		return
 	}
-	defer ss.mu.Unlock()
-	if req.New {
-		ss.Msgs = nil
-	}
-	ss.Cwd = req.Cwd
-	ss.ReadOnly = req.ReadOnly
-	if req.Think != nil {
-		ss.Think = *req.Think
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// The client closes the connection to cancel the run.
 	go func() {
@@ -265,32 +280,156 @@ func (s *Server) run(c net.Conn, r *bufio.Reader, req ClientReq, emit func(Event
 			}
 		}
 	}()
+	s.execRun(ctx, cancel, ss, req, emit)
+}
+
+// execRun waits for its turn on the session, then runs the prompt. Every
+// event goes to the requester (emit) and to the watchers of the session.
+func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Session, req ClientReq, emit func(Event)) {
+	all := func(e Event) {
+		emit(e)
+		ss.broadcast(e)
+	}
+	if !ss.mu.TryLock() {
+		all(Event{T: "queued", From: req.From, Text: req.Prompt})
+		if !lockCtx(ctx, &ss.mu) {
+			all(Event{T: "dropped", From: req.From, Text: req.Prompt})
+			return
+		}
+	}
+	defer ss.mu.Unlock()
+	ss.setCancel(cancel)
+	defer ss.setCancel(nil)
+	if req.New {
+		ss.Msgs = nil
+	}
+	ss.Cwd = req.Cwd
+	ss.ReadOnly = req.ReadOnly
+	if req.Think != nil {
+		ss.Think = *req.Think
+	}
+	all(Event{T: "user", From: req.From, Text: req.Prompt})
 
 	llm := &LLM{BaseURL: s.cfg.URL, Model: s.cfg.Model, HTTP: &http.Client{}}
 	if err := llm.ResolveModel(ctx); err != nil {
-		emit(Event{T: "error", Text: err.Error()})
+		all(Event{T: "error", Text: err.Error()})
+		all(Event{T: "done", From: req.From})
 		return
 	}
 	a := &Agent{LLM: llm, Cfg: s.cfg}
-	st := a.Run(ctx, ss, req.Prompt, emit)
+	st := a.Run(ctx, ss, req.Prompt, req.From, all)
 	s.save(ss)
 	final := ""
 	if n := len(ss.Msgs); n > 0 && ss.Msgs[n-1].Role == "assistant" {
 		final = ss.Msgs[n-1].Content
 	}
-	emit(Event{T: "done", Text: strings.TrimSpace(final), Stats: &st})
+	all(Event{T: "done", From: req.From, Text: strings.TrimSpace(final), Stats: &st})
 }
 
-func (s *Server) listSessions(emit func(Event)) {
+// lockCtx takes the mutex, or gives up when ctx ends.
+func lockCtx(ctx context.Context, mu *sync.Mutex) bool {
+	for {
+		if mu.TryLock() {
+			if ctx.Err() != nil {
+				mu.Unlock()
+				return false
+			}
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// attach streams every event of the session to the client until it leaves.
+// It starts with the history, marked as replay.
+func (s *Server) attach(r *bufio.Reader, req ClientReq, emit func(Event)) {
+	ss, err := s.session(req.Session, req.Cwd)
+	if err != nil {
+		emit(Event{T: "error", Text: err.Error()})
+		return
+	}
+	ch := make(chan Event, 4096)
+	gone := make(chan struct{})
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			if _, err := r.Read(buf); err != nil {
+				close(gone)
+				return
+			}
+		}
+	}()
+	// Take the history and join the watchers under one lock, so no event is lost
+	// between them. The run lock is not needed: Msgs only grows during a run, and
+	// a replay that misses the newest message of a running step is harmless.
+	ss.wmu.Lock()
+	hist := replay(ss.Msgs)
+	if ss.watchers == nil {
+		ss.watchers = map[chan Event]struct{}{}
+	}
+	ss.watchers[ch] = struct{}{}
+	running := ss.cancel != nil
+	ss.wmu.Unlock()
+	defer func() {
+		ss.wmu.Lock()
+		delete(ss.watchers, ch)
+		ss.wmu.Unlock()
+	}()
+	for _, e := range hist {
+		emit(e)
+	}
+	emit(Event{T: "attached", OK: running, Text: ss.Cwd})
+	for {
+		select {
+		case e := <-ch:
+			emit(e)
+		case <-gone:
+			return
+		case <-s.stop:
+			return
+		}
+	}
+}
+
+func replay(msgs []Message) []Event {
+	var out []Event
+	for _, m := range msgs {
+		switch m.Role {
+		case "user":
+			out = append(out, Event{T: "user", From: m.From, Text: m.Content, Replay: true})
+		case "assistant":
+			if strings.TrimSpace(m.Content) != "" {
+				out = append(out, Event{T: "text", Text: strings.TrimSpace(m.Content), Replay: true})
+			}
+			for _, tc := range m.ToolCalls {
+				out = append(out, Event{T: "tool", Tool: tc.Function.Name, Text: argSummary(tc.Function.Name, tc.Function.Arguments), Replay: true})
+			}
+		case "tool":
+			ok := !strings.HasPrefix(m.Content, "error:") && !strings.Contains(m.Content, "[exit ") || strings.Contains(m.Content, "[exit 0]")
+			out = append(out, Event{T: "result", Tool: m.Name, OK: ok, Text: firstLine(m.Content), Replay: true})
+		}
+	}
+	return out
+}
+
+// SessionInfo is one row of the session list.
+type SessionInfo struct {
+	Name    string    `json:"name"`
+	Updated time.Time `json:"updated"`
+	Msgs    int       `json:"msgs"`
+	Cwd     string    `json:"cwd"`
+	First   string    `json:"first"` // the first user message
+	Last    string    `json:"last"`  // the last user message
+}
+
+func sessionList() []SessionInfo {
 	d, _ := qhDir()
 	files, _ := filepath.Glob(filepath.Join(d, "sessions", "*.json"))
-	type row struct {
-		name string
-		t    time.Time
-		n    int
-		cwd  string
-	}
-	var rows []row
+	var rows []SessionInfo
 	for _, f := range files {
 		st, err := os.Stat(f)
 		if err != nil {
@@ -300,12 +439,25 @@ func (s *Server) listSessions(emit func(Event)) {
 		if b, err := os.ReadFile(f); err == nil {
 			json.Unmarshal(b, &ss)
 		}
-		rows = append(rows, row{strings.TrimSuffix(filepath.Base(f), ".json"), st.ModTime(), len(ss.Msgs), ss.Cwd})
+		r := SessionInfo{Name: strings.TrimSuffix(filepath.Base(f), ".json"), Updated: st.ModTime(), Msgs: len(ss.Msgs), Cwd: ss.Cwd}
+		for _, m := range ss.Msgs {
+			if m.Role == "user" {
+				if r.First == "" {
+					r.First = oneLine(m.Content, 200)
+				}
+				r.Last = oneLine(m.Content, 200)
+			}
+		}
+		rows = append(rows, r)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].t.After(rows[j].t) })
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Updated.After(rows[j].Updated) })
+	return rows
+}
+
+func (s *Server) listSessions(emit func(Event)) {
 	var b strings.Builder
-	for _, r := range rows {
-		fmt.Fprintf(&b, "%-16s %s  %4d msgs  %s\n", r.name, r.t.Format("2006-01-02 15:04"), r.n, r.cwd)
+	for _, r := range sessionList() {
+		fmt.Fprintf(&b, "%-16s %s  %4d msgs  %s\n", r.Name, r.Updated.Format("2006-01-02 15:04"), r.Msgs, r.Cwd)
 	}
 	emit(Event{T: "done", Text: strings.TrimRight(b.String(), "\n")})
 }

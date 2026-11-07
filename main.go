@@ -18,12 +18,14 @@ import (
 	"time"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 const usage = `qh: a coding agent for a local Qwen model
 
 usage:
-  qh [-s session]              chat in the terminal
+  qh [-s session]              chat in the terminal; shows every run on the session
+  qh -c                        continue the latest session of this folder
+  qh -r [name]                 pick a session to resume, or resume NAME
   qh run [flags] "task"        run one task and print the report (task "-" reads stdin)
   qh sessions                  list the sessions
   qh reset [-s session]        clear a session
@@ -38,6 +40,7 @@ run flags:
   -nothink    turn thinking off for this session
   -ro         read-only run: the tools are read, grep and ls
   -timeout d  cancel the run after d (for example 15m) and exit with 124
+  -from name  label that an open chat on the session shows (default $QH_FROM or "qh run")
   -q          print only the report
 
 The daemon listens on ~/.qh/qh.sock and starts on the first call.
@@ -275,9 +278,6 @@ func stream(req ClientReq, v *view) (*Event, error) {
 			return &e, nil
 		}
 		v.event(e)
-		if e.T == "error" && e.Stats == nil && strings.Contains(e.Text, "busy") {
-			return nil, errors.New(e.Text)
-		}
 	}
 }
 
@@ -290,6 +290,7 @@ func runCmd(args []string) error {
 	quiet := fs.Bool("q", false, "print only the report")
 	ro := fs.Bool("ro", false, "read-only: the tools are read, grep and ls")
 	timeout := fs.Duration("timeout", 0, "cancel the run after this long, for example 15m")
+	from := fs.String("from", os.Getenv("QH_FROM"), "label for watchers of the session, for example opus")
 	fs.Parse(args)
 	task := strings.Join(fs.Args(), " ")
 	if task == "-" {
@@ -306,7 +307,7 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	req := ClientReq{Op: "run", Session: *name, Cwd: cwd, Prompt: task, New: *fresh, ReadOnly: *ro}
+	req := ClientReq{Op: "run", Session: *name, Cwd: cwd, Prompt: task, New: *fresh, ReadOnly: *ro, From: *from}
 	if *nothink {
 		f := false
 		req.Think = &f
@@ -354,7 +355,31 @@ End a line with \ to write more lines. Ctrl+C stops a run.`
 func chat(args []string) error {
 	fs := flag.NewFlagSet("qh", flag.ExitOnError)
 	name := fs.String("s", "main", "session")
+	cont := fs.Bool("c", false, "continue the latest session of this folder")
+	resume := fs.Bool("r", false, "pick a session to resume (or give its name)")
 	fs.Parse(args)
+	pick := false
+	switch {
+	case *resume && fs.NArg() > 0:
+		*name = fs.Arg(0)
+	case *resume:
+		pick = true
+	case *cont:
+		cwd, _ := os.Getwd()
+		*name = latestSession(cwd)
+	}
+	if isTTY(os.Stdin) && isTTY(os.Stdout) && os.Getenv("TERM") != "dumb" {
+		return chatTUI(*name, pick)
+	}
+	if pick {
+		return errors.New("qh -r needs a terminal; use qh -r NAME")
+	}
+	return chatPlain(*name)
+}
+
+// chatPlain is the line chat for pipes and dumb terminals.
+func chatPlain(session string) error {
+	name := &session
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -411,7 +436,7 @@ func chat(args []string) error {
 			continue
 		}
 		v.inText = false
-		e, err := stream(ClientReq{Op: "run", Session: *name, Cwd: cwd, Prompt: text}, v)
+		e, err := stream(ClientReq{Op: "run", Session: *name, Cwd: cwd, Prompt: text, From: "chat"}, v)
 		if err != nil {
 			fmt.Println("\nqh:", err)
 			continue

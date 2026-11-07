@@ -4,6 +4,8 @@ qh is a small coding agent for Qwen models on an OpenAI-compatible server. I wro
 
 The daemon listens on a Unix socket (`~/.qh/qh.sock`). It keeps the sessions and runs the agent loop. `qh run` and the chat client connect to it, and the first call starts it. It builds on Linux and macOS.
 
+The socket takes one JSON line per connection. `run` streams the events of a run back; `attach` streams every event of a session (first its history) until the client leaves; `cancel` stops the active run. Runs on one session go one at a time, in order.
+
 ## Differences from pi
 
 I used pi with these models first. Some things cost time:
@@ -37,6 +39,8 @@ qh run -s lexer -C ~/src/iris -new "add a test for the new duration literals"
 echo "long task text" | qh run -
 qh run -ro -timeout 10m "where is the config file parsed?"
 qh                # chat in this directory, session "main"
+qh -c             # continue the newest session of this directory
+qh -r             # pick a session to resume
 qh sessions
 qh reset -s lexer
 qh stop
@@ -44,7 +48,9 @@ qh stop
 
 `qh run` prints the final report on stdout. Each tool call is one line on stderr, and the last line has the step count, tokens and time. Ctrl+C cancels the run, and so does `-timeout` (exit code 124); the daemon then kills the running command.
 
-Chat commands: `/new`, `/think on|off`, `/sessions`, `/exit`. End a line with `\` to keep typing. The thinking is hidden, and a counter shows its length while it runs.
+The chat shows every run on its session, from any client. When Claude runs `qh run -s main -from opus "..."`, the open chat prints the message with an `opus` label and streams the answer. Messages that arrive during a run wait in a queue, and the chat shows them as queued. Esc or Ctrl+C stops the run that is active, whoever started it.
+
+In the chat, Enter sends and Ctrl+J starts a new line (pasted text keeps its lines). Up and Down walk the history, Ctrl+T shows the thinking, and Ctrl+C twice quits. Commands: `/new`, `/resume`, `/think on|off`, `/sessions`, `/clear`, `/exit`. Without a terminal (a pipe, or `TERM=dumb`) qh uses a plain line chat.
 
 Sessions are saved in `~/.qh/sessions/NAME.json`, so they survive a daemon restart.
 

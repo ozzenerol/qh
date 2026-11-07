@@ -14,12 +14,43 @@ import (
 )
 
 type Session struct {
-	Name     string    `json:"name"`
-	Cwd      string    `json:"cwd"`
-	Think    bool      `json:"think"`
-	ReadOnly bool      `json:"read_only"`
-	Msgs     []Message `json:"messages"`
-	mu       sync.Mutex
+	Name     string     `json:"name"`
+	Cwd      string     `json:"cwd"`
+	Think    bool       `json:"think"`
+	ReadOnly bool       `json:"read_only"`
+	Msgs     []Message  `json:"messages"`
+	mu       sync.Mutex // held for the whole run
+
+	wmu      sync.Mutex // guards watchers and cancel
+	watchers map[chan Event]struct{}
+	cancel   context.CancelFunc
+}
+
+func (s *Session) broadcast(e Event) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	for ch := range s.watchers {
+		select {
+		case ch <- e:
+		default: // a watcher that does not read loses events; the run goes on
+		}
+	}
+}
+
+func (s *Session) setCancel(c context.CancelFunc) {
+	s.wmu.Lock()
+	s.cancel = c
+	s.wmu.Unlock()
+}
+
+func (s *Session) cancelRun() bool {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if s.cancel == nil {
+		return false
+	}
+	s.cancel()
+	return true
 }
 
 type Stats struct {
@@ -34,11 +65,13 @@ type Stats struct {
 }
 
 type Event struct {
-	T     string `json:"t"` // thinking, text, tool, result, info, error, done, list
-	Text  string `json:"text,omitempty"`
-	Tool  string `json:"tool,omitempty"`
-	OK    bool   `json:"ok,omitempty"`
-	Stats *Stats `json:"stats,omitempty"`
+	T      string `json:"t"` // user, queued, dropped, thinking, text, tool, result, info, error, done, attached
+	From   string `json:"from,omitempty"`
+	Replay bool   `json:"replay,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Tool   string `json:"tool,omitempty"`
+	OK     bool   `json:"ok,omitempty"`
+	Stats  *Stats `json:"stats,omitempty"`
 }
 
 type Agent struct {
@@ -123,13 +156,13 @@ func looping(s string) bool {
 	return strings.Count(s[start:len(s)-tail], end) >= 2
 }
 
-func (a *Agent) Run(ctx context.Context, s *Session, prompt string, emit func(Event)) Stats {
+func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit func(Event)) Stats {
 	t0 := time.Now()
 	st := Stats{Model: filepath.Base(a.LLM.Model)}
 	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly}
 	schemas := toolSchemas(s.ReadOnly)
 	system := Message{Role: "system", Content: buildSystem(s.Cwd, s.ReadOnly)}
-	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt})
+	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})
 	seen := map[string]int{}
 
 	for st.Steps < a.Cfg.MaxSteps {
@@ -176,7 +209,11 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt string, emit func(Ev
 			err = nil
 		}
 		if err != nil {
-			emit(Event{T: "error", Text: err.Error()})
+			if ctx.Err() != nil {
+				emit(Event{T: "info", Text: "interrupted"})
+			} else {
+				emit(Event{T: "error", Text: err.Error()})
+			}
 			break
 		}
 		st.Prompt, st.Cached = u.PromptTokens, u.Details.CachedTokens
@@ -200,7 +237,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt string, emit func(Ev
 			}
 		}
 		if ctx.Err() != nil {
-			emit(Event{T: "error", Text: "cancelled"})
+			emit(Event{T: "info", Text: "interrupted"})
 			break
 		}
 	}

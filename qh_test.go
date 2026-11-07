@@ -126,7 +126,7 @@ func TestAgentLoop(t *testing.T) {
 	a := &Agent{LLM: llm, Cfg: Config{MaxSteps: 5, MaxTokens: 100, ThinkBudget: 1000}}
 	s := &Session{Cwd: t.TempDir(), Think: true}
 	var events []string
-	st := a.Run(context.Background(), s, "list files", func(e Event) { events = append(events, e.T+":"+e.Tool) })
+	st := a.Run(context.Background(), s, "list files", "test", func(e Event) { events = append(events, e.T+":"+e.Tool) })
 	if st.Steps != 2 || st.Output != 14 {
 		t.Fatalf("stats %+v", st)
 	}
@@ -221,5 +221,149 @@ func TestReadOnlyTools(t *testing.T) {
 	}
 	if len(toolSchemas(true)) != 3 || len(toolSchemas(false)) != 4 {
 		t.Fatal("schemas")
+	}
+}
+
+// slowModel answers after a delay, or until the request is cancelled.
+type slowModel struct{ delay time.Duration }
+
+func (m slowModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/v1/models" {
+		fmt.Fprint(w, `{"data":[{"id":"/m/slow"}]}`)
+		return
+	}
+	var body map[string]any
+	json.NewDecoder(r.Body).Decode(&body)
+	msgs := body["messages"].([]any)
+	last := msgs[len(msgs)-1].(map[string]any)["content"].(string)
+	w.Header().Set("Content-Type", "text/event-stream")
+	select {
+	case <-time.After(m.delay):
+	case <-r.Context().Done():
+		return
+	}
+	b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": "echo: " + last}}}})
+	fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", b)
+}
+
+func TestAttachQueueCancel(t *testing.T) {
+	ts := httptest.NewServer(slowModel{delay: 300 * time.Millisecond})
+	defer ts.Close()
+	t.Setenv("QH_HOME", t.TempDir())
+	t.Setenv("QH_URL", ts.URL+"/v1")
+	done := make(chan error, 1)
+	go func() { done <- serve() }()
+	for i := 0; i < 50; i++ {
+		if _, err := os.Stat(sockPath()); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cwd := t.TempDir()
+
+	// a chat attaches to the session
+	ac, adec, err := send(ClientReq{Op: "attach", Session: "s", Cwd: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ac.Close()
+	var e Event
+	if adec.Decode(&e); e.T != "attached" {
+		t.Fatalf("first event %+v", e)
+	}
+	got := make(chan Event, 100)
+	go func() {
+		for {
+			var e Event
+			if adec.Decode(&e) != nil {
+				return
+			}
+			got <- e
+		}
+	}()
+
+	// opus sends one run and, while it runs, a second one; the chat sends a third detached
+	res := make(chan string, 2)
+	for _, p := range []string{"one", "two"} {
+		go func(p string) {
+			c, dec, err := send(ClientReq{Op: "run", Session: "s", Cwd: cwd, Prompt: p, From: "opus"})
+			if err != nil {
+				res <- err.Error()
+				return
+			}
+			defer c.Close()
+			for {
+				var e Event
+				if dec.Decode(&e) != nil {
+					res <- "eof"
+					return
+				}
+				if e.T == "done" {
+					res <- e.Text
+					return
+				}
+			}
+		}(p)
+		time.Sleep(50 * time.Millisecond)
+	}
+	r1, r2 := <-res, <-res
+	if r1 != "echo: one" || r2 != "echo: two" {
+		t.Fatalf("results %q %q", r1, r2)
+	}
+	var seen []string
+	timeout := time.After(2 * time.Second)
+collect:
+	for {
+		select {
+		case e := <-got:
+			seen = append(seen, e.T+":"+e.From+":"+e.Text)
+			if e.T == "done" && e.Text == "echo: two" {
+				break collect
+			}
+		case <-timeout:
+			t.Fatalf("watcher saw %v", seen)
+		}
+	}
+	want := []string{"user:opus:one", "queued:opus:two", "text::echo: one", "done:opus:echo: one", "user:opus:two", "text::echo: two", "done:opus:echo: two"}
+	if strings.Join(seen, "|") != strings.Join(want, "|") {
+		t.Fatalf("watcher saw\n%v\nwant\n%v", seen, want)
+	}
+
+	// a detached run can be cancelled with the cancel op
+	ts.Config.Handler = slowModel{delay: 5 * time.Second}
+	if err := simpleQuiet(ClientReq{Op: "run", Session: "s", Cwd: cwd, Prompt: "long", From: "chat:1", Detach: true}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	start := time.Now()
+	if err := simpleQuiet(ClientReq{Op: "cancel", Session: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		select {
+		case e := <-got:
+			if e.T == "done" {
+				if time.Since(start) > time.Second {
+					t.Fatal("cancel was slow")
+				}
+				simple(ClientReq{Op: "stop"})
+				<-done
+				return
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("no done after cancel")
+		}
+	}
+}
+
+func TestWrapAndVisible(t *testing.T) {
+	s := inline("a **bold** word and `code` here, then more words to wrap around", "")
+	for _, l := range wrap(s, 20) {
+		if visible(l) > 20 {
+			t.Fatalf("line too long: %q", l)
+		}
+	}
+	if visible(cBold+"héllo"+cReset) != 5 {
+		t.Fatal("visible")
 	}
 }
