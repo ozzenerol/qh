@@ -57,7 +57,7 @@ Sessions are saved in `~/.qh/sessions/NAME.json`, so they survive a daemon resta
 
 ## Compaction
 
-When a request passes 80% of `context` (262144 tokens by default), qh asks the model for a summary of the conversation and replaces the messages with it. This happens before a new prompt, or between two steps of a run; in the second case the model gets "continue the task from the summary". `/compact [focus]` in the chat, or `qh compact -s NAME [focus]`, does it by hand. The summary request is the normal prompt plus one question, so the server reads the whole conversation from its cache and only writes the summary. The old messages go to `~/.qh/sessions/archive/`. In the chat, Ctrl+O shows the last summary.
+When a request passes 80% of `context` (262144 tokens by default), qh asks the model for a summary of the conversation and replaces the messages with it. This happens before a new prompt, or between two steps of a run; in the second case the model gets "continue the task from the summary". `/compact [focus]` in the chat, or `qh compact -s NAME [focus]`, does it by hand. The summary request is the normal prompt plus one question, so the server reads the whole conversation from its cache and only writes the summary. The old messages go to `~/.qh/sessions/archive/`. In the chat, Ctrl+O shows or hides the last summary above the input box.
 
 I use it with Claude Code as the coordinator. Claude writes the task, runs `qh run -s NAME "..."` and reads the report, then checks the diff itself. A second `qh run -s NAME` continues the same session, so a correction does not need the whole brief again.
 

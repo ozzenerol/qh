@@ -38,7 +38,7 @@ func helpLines() []string {
 		{"↑ ↓", "history"},
 		{"/", "commands"},
 		{"ctrl+t", "show or hide the thinking"},
-		{"ctrl+o", "show the last compaction summary"},
+		{"ctrl+o", "show or hide the last compaction summary"},
 		{"ctrl+l", "clear the screen"},
 		{"ctrl+c ×2", "quit"},
 	} {
@@ -117,6 +117,7 @@ type tui struct {
 	window      int
 	compacting  bool
 	lastSummary string
+	showSummary bool
 	lastTS      string
 	notice      string
 
@@ -398,6 +399,9 @@ func (t *tui) draw() {
 		return
 	}
 	var rows []string
+	if t.showSummary && t.lastSummary != "" {
+		rows = append(rows, t.summaryPanel()...)
+	}
 	if t.textPart != "" {
 		pre := "  "
 		if !t.inMsg {
@@ -542,6 +546,31 @@ func clipLeft(s string, w int) string {
 		return s
 	}
 	return "…" + string(r[len(r)-w+1:])
+}
+
+// summaryPanel is the last compaction summary, cut to fit the screen.
+func (t *tui) summaryPanel() []string {
+	md := mdState{}
+	var body []string
+	for _, l := range strings.Split(t.lastSummary, "\n") {
+		for _, wl := range wrap(md.line(l), t.width-5) {
+			body = append(body, wl)
+		}
+	}
+	room := max(3, termHeight(int(t.out.Fd()))-14)
+	more := ""
+	if len(body) > room {
+		more = fmt.Sprintf("… %d more lines", len(body)-room)
+		body = body[:room]
+	}
+	rows := []string{"", cAccent + "✻ " + cReset + cBold + "Summary" + cReset + cGray + " · ctrl+o hides it"}
+	for _, l := range body {
+		rows = append(rows, cFrame+"  │ "+cReset+l)
+	}
+	if more != "" {
+		rows = append(rows, cGray+"  "+more)
+	}
+	return rows
 }
 
 func shortPath(p string) string {
@@ -815,14 +844,7 @@ func (t *tui) key(r rune) uiAction {
 			t.notice = "no compaction summary in this session"
 			break
 		}
-		md := mdState{}
-		lines := []string{"", cAccent + cBold + "Summary" + cReset}
-		for _, l := range strings.Split(t.lastSummary, "\n") {
-			for _, wl := range wrap(md.line(l), t.width-3) {
-				lines = append(lines, "  "+wl)
-			}
-		}
-		t.print(lines...)
+		t.showSummary = !t.showSummary
 	case 0x14:
 		t.showThink = !t.showThink
 		t.notice = "thinking " + map[bool]string{true: "shown", false: "hidden"}[t.showThink]

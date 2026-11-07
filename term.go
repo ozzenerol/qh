@@ -41,3 +41,11 @@ func termWidth(fd int) int {
 	}
 	return int(ws.Col)
 }
+
+func termHeight(fd int) int {
+	var ws struct{ Row, Col, X, Y uint16 }
+	if err := ioctl(fd, syscall.TIOCGWINSZ, unsafe.Pointer(&ws)); err != nil || ws.Row == 0 {
+		return 24
+	}
+	return int(ws.Row)
+}
