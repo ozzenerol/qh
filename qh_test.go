@@ -531,3 +531,13 @@ func TestSelfCheckAndChecks(t *testing.T) {
 		t.Fatalf("last: %q", last.Content)
 	}
 }
+
+func TestFailLine(t *testing.T) {
+	out := "Calculating task graph as no cached configuration is available\nReusing configuration cache.\ne: file.kt:3:5 Named arguments are prohibited for non-Kotlin functions\nBUILD FAILED in 4s\n[exit 1]"
+	if got := failLine(out); !strings.Contains(got, "Named arguments") || !strings.HasSuffix(got, "[exit 1]") {
+		t.Fatalf("failLine: %q", got)
+	}
+	if got := failLine("one\ntwo\n[exit 2]"); got != "two [exit 2]" {
+		t.Fatalf("failLine: %q", got)
+	}
+}

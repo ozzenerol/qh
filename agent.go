@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -355,7 +356,11 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			if !ok {
 				st.ToolErrs++
 			}
-			emit(Event{T: "result", Tool: tc.Function.Name, OK: ok, Text: firstLine(out)})
+			summary := firstLine(out)
+			if !ok {
+				summary = failLine(out)
+			}
+			emit(Event{T: "result", Tool: tc.Function.Name, OK: ok, Text: summary})
 			s.Msgs = append(s.Msgs, Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name, Content: out})
 			if ctx.Err() != nil {
 				break
@@ -450,7 +455,11 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, st *
 		emit(Event{T: "tool", Tool: "check", Text: c})
 		args, _ := json.Marshal(map[string]any{"command": c, "timeout": 900})
 		out, ok := tools.Run(ctx, "bash", string(args))
-		emit(Event{T: "result", Tool: "check", OK: ok, Text: firstLine(out)})
+		summary := firstLine(out)
+		if !ok {
+			summary = failLine(out)
+		}
+		emit(Event{T: "result", Tool: "check", OK: ok, Text: summary})
 		if ok {
 			st.Checks = append(st.Checks, "qh check passed: "+c)
 			continue
@@ -467,4 +476,28 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, st *
 	}
 	return "qh ran the commands from the \"Done when\" part after your report, and these failed:\n\n" +
 		strings.Join(fails, "\n\n") + "\n\nFix the cause, run the command again, then give the final report."
+}
+
+var errWords = regexp.MustCompile(`(?i)\berror\b|error:|\bfailed\b|failure|exception|panic|cannot|not found|denied|^e: `)
+
+// failLine picks the line that says what went wrong in the output of a
+// failed call: the first line that looks like an error, else the last line
+// with text. Build tools print banners first, so the first line rarely helps.
+func failLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	exit := ""
+	if n := len(lines); n > 1 && strings.HasPrefix(lines[n-1], "[exit ") {
+		exit, lines = " "+lines[n-1], lines[:n-1]
+	}
+	for _, l := range lines {
+		if errWords.MatchString(l) {
+			return oneLine(l, 140) + exit
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return oneLine(lines[i], 140) + exit
+		}
+	}
+	return strings.TrimSpace(exit)
 }
