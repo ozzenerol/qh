@@ -960,6 +960,14 @@ func junitFailures(root string, start time.Time) (string, string) {
 					shown++
 				}
 			}
+			if m := statusMismatch.FindStringSubmatch(msg + "\n" + text); m != nil {
+				if body := responseBody(text + "\n" + string(data)); body != "" {
+					b.WriteString("    response body: " + oneLine(body, 300) + "\n")
+					if strings.Contains(body, m[1]) {
+						fmt.Fprintf(&b, "    [qh: the body says %s but the status was %s, so the handler ran and the code that writes the response does not set the status]\n", m[1], m[2])
+					}
+				}
+			}
 		}
 	}
 	if n > 10 {
@@ -984,6 +992,20 @@ func junitFailures(root string, start time.Time) (string, string) {
 		}
 	}
 	return sum, strings.TrimRight(b.String(), "\n")
+}
+
+var statusMismatch = regexp.MustCompile(`(?i)status\s*(?:code)?\s*expected:?\s*<?\[?(\d{3})[^\n]*?but was:?\s*<?\[?(\d{3})`)
+
+var bodyLine = regexp.MustCompile(`(?m)^\s*(?:Body\s*=\s*|<\s*)?(\{.*\})\s*$`)
+
+// responseBody finds the first JSON body in a test failure or its output,
+// such as MockMvc's "Body = {...}" or WebTestClient's "< {...}".
+func responseBody(s string) string {
+	s = strings.NewReplacer("&quot;", `"`, "&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(s)
+	if m := bodyLine.FindStringSubmatch(s); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // similar is the Dice coefficient of the character pairs of a and b (0 to 1).

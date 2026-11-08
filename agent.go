@@ -426,6 +426,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	editFile, editRun := "", 0   // edits in a row on one file
 	lastErrs := ""               // the compiler errors of the last failed build
 	blocked := 0                 // library commands blocked after the second nudge
+	testEdits := 0               // writes and edits to test files since the last main-code change
 	fixTurn := false             // the model got one turn to fix failed checks
 	wantClean := noWarnings.MatchString(prompt)
 	defer s.setState(false, 0)
@@ -539,6 +540,18 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 					e = e[:j]
 				}
 				lastErrs = e
+			}
+			if (tc.Function.Name == "edit" || tc.Function.Name == "write") && ok {
+				var pa struct{ Path string }
+				json.Unmarshal([]byte(tc.Function.Arguments), &pa)
+				if isTestPath(pa.Path) {
+					if testEdits++; testEdits == 8 || testEdits == 16 {
+						out += fmt.Sprintf("\n\n[qh: that is %d changes to test files and none to the main code since then. The tests may be right: read the failure again, mainly the actual values and the response, and check the main code against it.]", testEdits)
+						emit(Event{T: "info", Text: "many test edits: pointing the model at the main code"})
+					}
+				} else if pa.Path != "" {
+					testEdits = 0
+				}
 			}
 			if tc.Function.Name == "edit" && ok {
 				var pa struct{ Path string }
@@ -1091,6 +1104,12 @@ func strayFiles(dir string) []string {
 	return fs
 }
 
+// isTestPath is true for files named like tests or kept under a test folder.
+func isTestPath(f string) bool {
+	low := strings.ToLower(f)
+	return strings.Contains(strings.ToLower(filepath.Base(f)), "test") || strings.Contains(low, "/test/") || strings.HasPrefix(low, "test/") || strings.Contains(low, "src/test")
+}
+
 var reflectRe = regexp.MustCompile(`getDeclaredField|getDeclaredMethod|isAccessible\s*=\s*true|setAccessible\(\s*true|trySetAccessible|ReflectionTestUtils|FieldUtils\.`)
 
 // reflectionInTests lists the lines of changed test files that open up
@@ -1098,8 +1117,7 @@ var reflectRe = regexp.MustCompile(`getDeclaredField|getDeclaredMethod|isAccessi
 func reflectionInTests(files []string) []string {
 	var out []string
 	for _, f := range files {
-		low := strings.ToLower(f)
-		if !strings.Contains(strings.ToLower(filepath.Base(f)), "test") && !strings.Contains(low, "/test/") && !strings.Contains(low, "/src/test") {
+		if !isTestPath(f) {
 			continue
 		}
 		b, err := os.ReadFile(f)

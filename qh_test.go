@@ -1056,3 +1056,18 @@ func TestFixColumnZero(t *testing.T) {
 		t.Fatal("raw string")
 	}
 }
+
+func TestStatusMismatchBody(t *testing.T) {
+	dir := t.TempDir()
+	d := filepath.Join(dir, "build", "test-results", "test")
+	os.MkdirAll(d, 0o755)
+	os.WriteFile(filepath.Join(d, "TEST-a.SecIT.xml"), []byte(`<testsuite><testcase name="x" classname="a.SecIT"><failure message="java.lang.AssertionError: Status expected:&lt;401&gt; but was:&lt;200&gt;">java.lang.AssertionError: Status expected:&lt;401&gt; but was:&lt;200&gt;
+	at a.SecIT.x(SecIT.kt:3)</failure></testcase><system-out>MockHttpServletResponse:
+           Status = 200
+             Body = {&quot;code&quot;:&quot;UNAUTHENTICATED&quot;,&quot;status&quot;:401}
+</system-out></testsuite>`), 0o644)
+	_, f := junitFailures(dir, time.Now().Add(-time.Minute))
+	if !strings.Contains(f, `response body: {"code":"UNAUTHENTICATED","status":401}`) || !strings.Contains(f, "does not set the status") {
+		t.Fatal(f)
+	}
+}
