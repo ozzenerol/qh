@@ -110,20 +110,24 @@ func (s *Session) cancelRun() bool {
 }
 
 type Stats struct {
-	Model    string   `json:"model"`
-	Steps    int      `json:"steps"`
-	Prompt   int      `json:"prompt_tokens"`
-	Cached   int      `json:"cached_tokens"`
-	Fresh    int      `json:"fresh_tokens"` // prompt tokens of all requests that were not in the server's cache
-	Output   int      `json:"output_tokens"`
-	Thinking int      `json:"thinking_chars"`
-	Secs     float64  `json:"secs"`
-	Retries  int      `json:"retries"`
-	Window   int      `json:"window"`
-	ToolErrs int      `json:"tool_errors"`
-	Limit    bool     `json:"step_limit,omitempty"` // the run stopped at max_steps
-	Checks   []string `json:"checks,omitempty"`     // results of the "Done when" commands
-	Todo     []string `json:"todo_open,omitempty"`  // todo items not done at the end
+	Model        string   `json:"model"`
+	Steps        int      `json:"steps"`
+	Prompt       int      `json:"prompt_tokens"`
+	Cached       int      `json:"cached_tokens"`
+	Fresh        int      `json:"fresh_tokens"`
+	Explores     int      `json:"explore_runs,omitempty"` // explore sub-runs; their steps and tokens are not in the fields above
+	ExploreSteps int      `json:"explore_steps,omitempty"`
+	ExploreOut   int      `json:"explore_output_tokens,omitempty"`
+	ExploreFresh int      `json:"explore_fresh_tokens,omitempty"` // prompt tokens of all requests that were not in the server's cache
+	Output       int      `json:"output_tokens"`
+	Thinking     int      `json:"thinking_chars"`
+	Secs         float64  `json:"secs"`
+	Retries      int      `json:"retries"`
+	Window       int      `json:"window"`
+	ToolErrs     int      `json:"tool_errors"`
+	Limit        bool     `json:"step_limit,omitempty"` // the run stopped at max_steps
+	Checks       []string `json:"checks,omitempty"`     // results of the "Done when" commands
+	Todo         []string `json:"todo_open,omitempty"`  // todo items not done at the end
 }
 
 type Event struct {
@@ -135,6 +139,7 @@ type Event struct {
 	After  int    `json:"after,omitempty"`
 	Tool   string `json:"tool,omitempty"`
 	OK     bool   `json:"ok,omitempty"`
+	Sub    bool   `json:"sub,omitempty"` // a tool call of an explore sub-run
 	Stats  *Stats `json:"stats,omitempty"`
 }
 
@@ -415,9 +420,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	}
 	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Seen: s.seen}
 	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
-	schemas := toolSchemas(s.ReadOnly)
+	schemas := a.schemas(s.ReadOnly)
 	s.answerOpen()
-	system := Message{Role: "system", Content: s.systemPrompt()}
+	system := Message{Role: "system", Content: s.systemPrompt(a.systemExtra(s.ReadOnly))}
 	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})
 	if a.Save != nil {
 		a.Save()
@@ -550,6 +555,8 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				}
 			} else if tc.Function.Name == "todo" && !s.ReadOnly {
 				out, ok = runTodo(s, tc.Function.Arguments, emit)
+			} else if tc.Function.Name == "explore" && !s.ReadOnly && a.exploreOn() {
+				out, ok = a.explore(ctx, s.Cwd, tc.Function.Arguments, &st, emit, &told)
 			} else {
 				out, ok = tools.Run(ctx, tc.Function.Name, tc.Function.Arguments)
 			}
@@ -655,7 +662,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			s.Msgs = append(s.Msgs, Message{Role: "user", From: "compact",
 				Content: "Continue the task from the summary. Check the files before you change them again."})
 			todoDue = true
-			system.Content = s.systemPrompt()
+			system.Content = s.systemPrompt(a.systemExtra(s.ReadOnly))
 		}
 	}
 	if !ended && st.Steps >= limit && ctx.Err() == nil {

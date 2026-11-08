@@ -1,6 +1,9 @@
 package main
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // systemPrompt returns the system prompt of the session. mlx_lm.server reuses
 // its cache only for a request that starts with the same tokens, so the
@@ -8,10 +11,17 @@ import "strconv"
 // the notes or the source folders change during it. It is built again for an
 // empty session, after compaction, and when the folder or read-only mode
 // changes, since the cache is lost then anyway.
-func (s *Session) systemPrompt() string {
-	key := s.Cwd + "\x00" + strconv.FormatBool(s.ReadOnly)
+// extra goes at the end of the base prompt, before the context files.
+func (s *Session) systemPrompt(extra string) string {
+	key := s.Cwd + "\x00" + strconv.FormatBool(s.ReadOnly) + "\x00" + extra
 	if s.System == "" || s.SysKey != key || len(s.Msgs) == 0 {
-		s.System, s.SysKey = buildSystem(s.Cwd, s.ReadOnly), key
+		p := buildSystem(s.Cwd, s.ReadOnly)
+		if i := strings.Index(p, "\n\n# "); i >= 0 {
+			p = p[:i] + extra + p[i:]
+		} else {
+			p += extra
+		}
+		s.System, s.SysKey = p, key
 	}
 	return s.System
 }

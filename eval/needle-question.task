@@ -1,0 +1,57 @@
+Find the function that sets the X-Request-Id response header. Write one line to answer.txt: its file path from the repo root, a colon, and the function name, like `svc/foo/foo.go:SetID`. Change no other file.
+
+Done when: `test -s answer.txt` passes.
+-- setup.sh --
+set -e
+names=(billing users orders reports audit search mail files tags notes teams roles plans quotas hooks keys logs jobs carts prices)
+for n in "${names[@]}"; do
+	mkdir -p "svc/$n"
+	cat > "svc/$n/headers.go" <<EOF
+package $n
+
+import "net/http"
+
+// setHeaders writes the response headers of the /$n endpoints.
+func setHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Service", "$n")
+}
+
+// requestID reads the X-Request-Id of the request, for the logs.
+func requestID(r *http.Request) string {
+	return r.Header.Get("X-Request-Id")
+}
+EOF
+done
+mkdir -p internal/mw
+cat > internal/mw/trace.go <<'EOF'
+package mw
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"net/http"
+)
+
+const traceHeader = "X-Request" + "-Id"
+
+// stamp gives every response the trace id of its request, or a new one.
+func stamp(w http.ResponseWriter, r *http.Request) {
+	id := r.Header.Get(traceHeader)
+	if id == "" {
+		b := make([]byte, 8)
+		rand.Read(b)
+		id = hex.EncodeToString(b)
+	}
+	w.Header().Set(traceHeader, id)
+}
+EOF
+-- check.sh --
+set -e
+grep -qx 'internal/mw/trace.go:stamp' <(tr -d ' `' < answer.txt | head -1) || { echo "answer: $(cat answer.txt)"; exit 1; }
+extra=$(git status --porcelain --untracked-files=all | grep -v ' answer.txt$' || true)
+[ -z "$extra" ] || { echo "other files changed: $extra"; exit 1; }
+-- go.mod --
+module app
+
+go 1.22

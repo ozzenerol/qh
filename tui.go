@@ -362,12 +362,23 @@ func (t *tui) event(e Event) {
 		}
 		t.flushText(false)
 	case "tool":
+		if e.Sub {
+			return // shown with its result
+		}
 		t.endMessage()
 		t.tool = cBold + displayName(e.Tool) + cReset + cGray + "(" + oneLine(e.Text, t.width-20) + ")" + cReset
 		if e.Replay {
 			return
 		}
 	case "result":
+		if e.Sub {
+			mark := cGray + "·"
+			if !e.OK {
+				mark = cRed + "·"
+			}
+			t.print(mark + cReset + cGray + "    " + displayName(e.Tool) + " " + oneLine(e.Text, t.width-20) + cReset)
+			return
+		}
 		dot := cGreen + "●"
 		if !e.OK {
 			dot = cRed + "●"

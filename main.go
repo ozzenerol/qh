@@ -241,12 +241,20 @@ func (v *view) event(e Event) {
 			fmt.Fprintln(v.out)
 			v.inText = false
 		}
+		ind := ""
+		if e.Sub {
+			ind = "    "
+		}
 		if !v.quiet {
-			fmt.Fprintln(v.log, v.dim("> "+e.Tool+" "+e.Text))
+			fmt.Fprintln(v.log, v.dim(ind+"> "+e.Tool+" "+e.Text))
 		}
 	case "result":
 		if !v.quiet && !e.OK {
-			fmt.Fprintln(v.log, v.dim("  failed: "+e.Text))
+			ind := ""
+			if e.Sub {
+				ind = "    "
+			}
+			fmt.Fprintln(v.log, v.dim(ind+"  failed: "+e.Text))
 		}
 	case "info":
 		v.clearStatus()
@@ -269,6 +277,9 @@ func statLine(st *Stats) string {
 	}
 	line := fmt.Sprintf("%s: %d steps, %d tool errors, %d tokens out, %.0fs (%.1f tok/s overall), context %d tokens",
 		st.Model, st.Steps, st.ToolErrs, st.Output, st.Secs, tps, st.Prompt)
+	if st.Explores > 0 {
+		line += fmt.Sprintf(", explore: %d runs, %d steps, %d tokens out", st.Explores, st.ExploreSteps, st.ExploreOut)
+	}
 	if st.Window > 0 {
 		pct := st.Prompt * 100 / st.Window
 		line += fmt.Sprintf(" (%d%% of %d)", pct, st.Window)

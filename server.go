@@ -29,14 +29,16 @@ type FormatCfg struct {
 }
 
 type Config struct {
-	URL         string   `json:"url"`
-	Model       string   `json:"model"`
-	MaxSteps    int      `json:"max_steps"`
-	MaxTokens   int      `json:"max_tokens"`
-	ThinkBudget int      `json:"think_budget"` // chars of thinking in one step
-	Context     int      `json:"context"`      // the model's context window in tokens
-	CompactAt   int      `json:"compact_at"`   // compact when a request passes this; 0 means 80% of context
-	WarnIgnore  []string `json:"warn_ignore"`  // regular expressions of warning lines that the checks ignore
+	URL          string   `json:"url"`
+	Model        string   `json:"model"`
+	MaxSteps     int      `json:"max_steps"`
+	MaxTokens    int      `json:"max_tokens"`
+	ThinkBudget  int      `json:"think_budget"`  // chars of thinking in one step
+	Context      int      `json:"context"`       // the model's context window in tokens
+	CompactAt    int      `json:"compact_at"`    // compact when a request passes this; 0 means 80% of context
+	WarnIgnore   []string `json:"warn_ignore"`   // regular expressions of warning lines that the checks ignore
+	Explore      *bool    `json:"explore"`       // the explore tool; nil means on
+	ExploreSteps int      `json:"explore_steps"` // step limit of one explore sub-run; 0 means 15
 	FormatCfg
 	Repos map[string]FormatCfg `json:"repos"` // settings for one repo, by the folder name of its git root
 }

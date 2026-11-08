@@ -51,13 +51,13 @@ func (a *Agent) Compact(ctx context.Context, s *Session, focus string, emit func
 	if strings.TrimSpace(focus) != "" {
 		ask += "\n\nGive most room to this: " + strings.TrimSpace(focus)
 	}
-	msgs := append([]Message{{Role: "system", Content: s.systemPrompt()}}, s.Msgs...)
+	msgs := append([]Message{{Role: "system", Content: s.systemPrompt(a.systemExtra(s.ReadOnly))}}, s.Msgs...)
 	msgs = append(msgs, Message{Role: "user", Content: ask})
 	// The tools stay in the request: they are part of the cached prefix.
 	var summary string
 	told := false
 	for try := 0; try < 2 && summary == ""; try++ {
-		msg, _, err := a.chat(ctx, Request{Messages: msgs, Tools: toolSchemas(s.ReadOnly), Think: false, MaxTok: 6000},
+		msg, _, err := a.chat(ctx, Request{Messages: msgs, Tools: a.schemas(s.ReadOnly), Think: false, MaxTok: 6000},
 			func(Delta) bool { return true }, emit, &told)
 		if err != nil {
 			return err
@@ -83,7 +83,7 @@ func (a *Agent) Compact(ctx context.Context, s *Session, focus string, emit func
 	}
 	s.LastPrompt = 0
 	s.System = "" // the cache is gone, so the next request may pick up new AGENTS.md and notes
-	after := estimateTokens(append([]Message{{Content: s.systemPrompt()}}, s.Msgs...))
+	after := estimateTokens(append([]Message{{Content: s.systemPrompt(a.systemExtra(s.ReadOnly))}}, s.Msgs...))
 	emit(Event{T: "compacted", Text: summary, Before: before, After: after})
 	return nil
 }
