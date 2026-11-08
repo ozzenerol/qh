@@ -129,6 +129,7 @@ type Stats struct {
 	ToolErrs     int            `json:"tool_errors"`
 	Removes      int            `json:"removes,omitempty"`       // rm -r targets in bash commands
 	CmdFails     int            `json:"failed_commands"`         // commands that ran and exited non-zero (failing builds and tests); not in ToolErrs
+	TimedOut     bool           `json:"timed_out,omitempty"`     // the run hit its -timeout; checks ran afterwards
 	Limit        bool           `json:"step_limit,omitempty"`    // the run stopped at max_steps
 	Checks       []string       `json:"checks,omitempty"`        // results of the "Done when" commands
 	Todo         []string       `json:"todo_open,omitempty"`     // todo items not done at the end
@@ -158,6 +159,11 @@ type Agent struct {
 	Wait func(bool)    // called when a request starts and stops waiting at the gate
 
 	UndoDir string // where the run keeps the files it changes, for qh undo; "" keeps nothing
+
+	// Wrap is the context of the whole request when Run gets a context with
+	// a time limit. When that limit hits, qh still runs the Done-when checks
+	// in Wrap, so a timed-out run reports what state it left.
+	Wrap context.Context
 }
 
 // chat sends one request through the gate. The model server answers one
@@ -708,6 +714,16 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			todoDue = true
 			system.Content = s.systemPrompt(a.systemExtra(s.ReadOnly))
 		}
+	}
+	if !ended && !s.ReadOnly && errors.Is(ctx.Err(), context.DeadlineExceeded) && a.Wrap != nil && a.Wrap.Err() == nil {
+		st.TimedOut = true
+		emit(Event{T: "info", Text: "the run hit its time limit; running the checks on what it left"})
+		wctx, cancel := context.WithTimeout(a.Wrap, 10*time.Minute)
+		if !checked {
+			a.finalChecks(wctx, tools, prompt, checks, changed, wantClean, true, &st, emit)
+		}
+		cancel()
+		st.Checks = append([]string{"qh note: the run hit its time limit before the model's report; the lines here describe the files as it left them"}, st.Checks...)
 	}
 	if !ended && st.Steps >= limit && ctx.Err() == nil {
 		st.Limit = true

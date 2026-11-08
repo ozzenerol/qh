@@ -95,6 +95,7 @@ type ClientReq struct {
 	New      bool   `json:"new,omitempty"`
 	Think    *bool  `json:"think,omitempty"`
 	ReadOnly bool   `json:"read_only,omitempty"`
+	Timeout  int    `json:"timeout,omitempty"` // run: seconds for the model loop; the checks still run after it
 }
 
 type chatReg struct{ from, session string }
@@ -383,7 +384,14 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 		return
 	}
 	all(Event{T: "user", From: req.From, Text: req.Prompt})
-	st := a.Run(ctx, ss, req.Prompt, req.From, all)
+	runCtx := ctx
+	if req.Timeout > 0 {
+		var stop context.CancelFunc
+		runCtx, stop = context.WithTimeout(ctx, time.Duration(req.Timeout)*time.Second)
+		defer stop()
+		a.Wrap = ctx
+	}
+	st := a.Run(runCtx, ss, req.Prompt, req.From, all)
 	s.save(ss)
 	final := ""
 	if n := len(ss.Msgs); n > 0 && ss.Msgs[n-1].Role == "assistant" {

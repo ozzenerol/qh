@@ -1179,3 +1179,31 @@ func TestRmTargets(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+func TestTimeoutStillChecks(t *testing.T) {
+	dir := t.TempDir()
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.Header().Set("Content-Type", "text/event-stream")
+		cmd := "sleep 0.3"
+		if n == 1 {
+			cmd = "echo ok > done.txt"
+		}
+		args, _ := json.Marshal(map[string]string{"command": cmd})
+		call, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{
+			map[string]any{"index": 0, "id": fmt.Sprint("c", n), "function": map[string]any{"name": "bash", "arguments": string(args)}}}}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", call)
+	}))
+	defer srv.Close()
+	wrap := context.Background()
+	a := &Agent{LLM: &LLM{BaseURL: srv.URL, Model: "m", HTTP: srv.Client()}, Cfg: Config{MaxSteps: 100, MaxTokens: 100, ThinkBudget: 30000}, Wrap: wrap}
+	s := &Session{Name: "t", Cwd: dir}
+	ctx, cancel := context.WithTimeout(wrap, 1500*time.Millisecond)
+	defer cancel()
+	st := a.Run(ctx, s, "Write done.txt.\n\nDone when: `test -f done.txt` passes.", "", func(Event) {})
+	all := strings.Join(st.Checks, "\n")
+	if !st.TimedOut || !strings.Contains(all, "qh check passed: test -f done.txt") || !strings.Contains(all, "time limit") {
+		t.Fatalf("%+v", st.Checks)
+	}
+}

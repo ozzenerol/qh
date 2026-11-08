@@ -46,7 +46,7 @@ run flags:
   -new        clear the session first
   -nothink    turn thinking off for this session
   -ro         read-only run: the tools are read, grep and ls
-  -timeout d  cancel the run after d (for example 15m) and exit with 124
+  -timeout d  stop the model after d (for example 15m), run the checks, and exit with 124
   -from name  label that an open chat on the session shows (default $QH_FROM or "qh run")
   -q          print only the report
 
@@ -370,9 +370,12 @@ func runCmd(args []string) error {
 	v := &view{out: os.Stdout, log: os.Stderr, color: isTTY(os.Stderr), quiet: *quiet}
 	fmt.Fprintln(os.Stderr, "qh: session "+*name)
 	if *timeout > 0 {
-		// Exit closes the connection, and the daemon cancels the run.
-		time.AfterFunc(*timeout, func() {
-			fmt.Fprintf(os.Stderr, "qh: timed out after %s\n", *timeout)
+		// The daemon stops the model at the timeout and then runs the
+		// checks. If even that hangs, exit; closing the connection cancels
+		// the run.
+		req.Timeout = int(timeout.Seconds())
+		time.AfterFunc(*timeout+12*time.Minute, func() {
+			fmt.Fprintf(os.Stderr, "qh: timed out after %s and the checks did not finish\n", *timeout)
 			os.Exit(124)
 		})
 	}
@@ -383,6 +386,10 @@ func runCmd(args []string) error {
 	fmt.Println(e.Text)
 	if !*quiet {
 		fmt.Fprintln(os.Stderr, v.dim(statLine(e.Stats)))
+	}
+	if e.Stats != nil && e.Stats.TimedOut {
+		fmt.Fprintf(os.Stderr, "qh: timed out after %s; the checks above ran on what the run left\n", *timeout)
+		os.Exit(124)
 	}
 	if e.Stats != nil && e.Stats.Limit {
 		fmt.Fprintln(os.Stderr, "qh: the run stopped at the step limit; the task may not be finished")
