@@ -341,7 +341,7 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 		all(Event{T: "done", From: req.From})
 		return
 	}
-	a := &Agent{LLM: llm, Cfg: s.cfg, Gate: s.gate, Save: func() { s.save(ss) }}
+	a := &Agent{LLM: llm, Cfg: s.cfg, Gate: s.gate, Save: func() { s.save(ss) }, Wait: ss.setWaiting}
 	if req.Compact {
 		if err := a.Compact(ctx, ss, req.Prompt, all); err != nil {
 			all(Event{T: "error", Text: err.Error()})
@@ -484,6 +484,7 @@ type SessionInfo struct {
 	Ctx     int       `json:"ctx"`   // tokens of the last request
 	Running bool      `json:"running"`
 	Step    int       `json:"step"`
+	Waiting bool      `json:"waiting"`
 	Cwd     string    `json:"cwd"`
 	First   string    `json:"first"` // the first user message
 	Last    string    `json:"last"`  // the last user message
@@ -509,6 +510,7 @@ func (s *Server) sessionList() []SessionInfo {
 		s.mu.Lock()
 		if live, ok := s.sessions[r.Name]; ok {
 			r.Running, r.Step = live.state()
+			r.Waiting = live.waitingNow()
 		}
 		s.mu.Unlock()
 		for _, m := range ss.Msgs {
@@ -534,6 +536,9 @@ func (s *Server) listSessions(emit func(Event)) {
 		state := ""
 		if r.Running {
 			state = fmt.Sprintf("  RUNNING step %d", r.Step)
+			if r.Waiting {
+				state = fmt.Sprintf("  WAITING for the model (step %d)", r.Step)
+			}
 		}
 		ctx := "ctx " + human(r.Ctx)
 		if s.cfg.Context > 0 {

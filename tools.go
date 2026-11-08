@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -290,13 +291,42 @@ func (t *Tools) read(fp string, off, limit int) (string, bool) {
 }
 
 func (t *Tools) write(fp, shown, c string) (string, bool) {
+	prev, hadFile := os.ReadFile(fp)
 	if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
 		return "error: " + err.Error(), false
 	}
 	if err := os.WriteFile(fp, []byte(c), 0o644); err != nil {
 		return "error: " + err.Error(), false
 	}
-	return fmt.Sprintf("wrote %s (%d lines)", shown, strings.Count(c, "\n")+1), true
+	n := strings.Count(c, "\n") + 1
+	if hadFile != nil {
+		return fmt.Sprintf("wrote %s (%d lines, new file)", shown, n), true
+	}
+	if string(prev) == c {
+		return fmt.Sprintf("wrote %s (%d lines, no change)", shown, n), true
+	}
+	add, del := lineDiff(string(prev), c)
+	return fmt.Sprintf("wrote %s (%d lines; vs before: %d lines added, %d removed)", shown, n, add, del), true
+}
+
+// lineDiff counts the lines that b adds to a and the lines it removes, by
+// line content (order is not compared).
+func lineDiff(a, b string) (add, del int) {
+	cnt := map[string]int{}
+	for _, l := range strings.Split(a, "\n") {
+		cnt[l]++
+	}
+	for _, l := range strings.Split(b, "\n") {
+		if cnt[l] > 0 {
+			cnt[l]--
+		} else {
+			add++
+		}
+	}
+	for _, v := range cnt {
+		del += v
+	}
+	return add, del
 }
 
 func (t *Tools) edit(fp, shown, old, nw string, all bool) (string, bool) {
@@ -408,12 +438,40 @@ func nearest(src, old string) string {
 		}
 	}
 	if n == 0 {
-		return "No line of old is in the file. Read the file again and copy the text exactly."
+		// No line matches exactly: vote with lines that are nearly the same.
+		for j, w := range want {
+			w = strings.TrimSpace(w)
+			if len(w) < 8 || len(lines) > 5000 {
+				continue
+			}
+			bi, bs := -1, 0.0
+			for i, l := range lines {
+				if sc := similar(w, strings.TrimSpace(l)); sc > bs {
+					bi, bs = i, sc
+				}
+			}
+			if bs >= 0.7 {
+				votes[bi-j]++
+			}
+		}
+		for start, v := range votes {
+			if v > n || (v == n && start < best) {
+				best, n = start, v
+			}
+		}
+		if n == 0 {
+			return "No line of old is in the file, not even nearly. The file has changed or old is from another file. Read the file again and copy the text exactly."
+		}
+		n = 0 // the header below then says the lines only look alike
 	}
 	from := max(0, best-2)
 	to := min(len(lines), best+len(want)+2, from+60)
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d of the %d lines of old match. The closest part of the file is lines %d-%d:\n", n, len(want), from+1, to)
+	if n == 0 {
+		fmt.Fprintf(&b, "No line of old matches exactly, but lines %d-%d look like it:\n", from+1, to)
+	} else {
+		fmt.Fprintf(&b, "%d of the %d lines of old match. The closest part of the file is lines %d-%d:\n", n, len(want), from+1, to)
+	}
 	for i := from; i < to; i++ {
 		fmt.Fprintf(&b, "%d\t%s\n", i+1, lines[i])
 	}
@@ -516,7 +574,9 @@ func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration)
 	if strings.TrimSpace(res) == "" {
 		res = "(no output)"
 	}
-	if code != 0 {
+	// A test command piped into tail exits 0 even when tests fail, so test
+	// commands get the report check whatever their exit code.
+	if code != 0 || testCmd.MatchString(command) {
 		if f := junitFailures(t.Cwd, start); f != "" {
 			res = strings.TrimRight(res, "\n") + "\n\n[qh: failing tests from the JUnit XML reports]\n" + f
 		}
@@ -533,6 +593,8 @@ func clip(s string) string {
 	cut := strings.Count(s[head:len(s)-tail], "\n")
 	return s[:head] + fmt.Sprintf("\n...[%d lines cut; filter the output with grep, head or tail]...\n", cut) + s[len(s)-tail:]
 }
+
+var testCmd = regexp.MustCompile(`(?i)\b(test|tests|check|verify|gradlew?|mvnw?|integrationTest)\b`)
 
 type junitCase struct {
 	Name    string `xml:"name,attr"`
@@ -624,4 +686,26 @@ func junitFailures(root string, start time.Time) string {
 		fmt.Fprintf(&b, "... and %d more failing tests\n", n-10)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// similar is the Dice coefficient of the character pairs of a and b (0 to 1).
+func similar(a, b string) float64 {
+	if a == b {
+		return 1
+	}
+	if len(a) < 2 || len(b) < 2 {
+		return 0
+	}
+	pairs := map[string]int{}
+	for i := 0; i+2 <= len(a); i++ {
+		pairs[a[i:i+2]]++
+	}
+	hit := 0
+	for i := 0; i+2 <= len(b); i++ {
+		if pairs[b[i:i+2]] > 0 {
+			pairs[b[i:i+2]]--
+			hit++
+		}
+	}
+	return 2 * float64(hit) / float64(len(a)-1+len(b)-1)
 }

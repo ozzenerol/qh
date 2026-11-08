@@ -606,3 +606,37 @@ func TestWarningLines(t *testing.T) {
 		t.Fatal("noWarnings")
 	}
 }
+
+func TestNearestFuzzyAndWriteDiff(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "R.kt")
+	os.WriteFile(p, []byte("class R {\n    \"verifiedAt\" to user.verifiedAt?.toOffset(),\n    \"blockedAt\" to user.blockedAt?.toOffset(),\n}\n"), 0o644)
+	tl := &Tools{Cwd: dir}
+	ctx := context.Background()
+	out, ok := tl.Run(ctx, "edit", `{"path":"R.kt","old":"\"verifiedAt\" to user.verifiedAt.toOffset(),\n\"blockedAt\" to user.blockedAt.toOffset(),","new":"x"}`)
+	if ok || !strings.Contains(out, "look like it") || !strings.Contains(out, "2\t") {
+		t.Fatalf("fuzzy: %s", out)
+	}
+	out, _ = tl.Run(ctx, "write", `{"path":"R.kt","content":"class R {\n    \"verifiedAt\" to 1,\n    \"blockedAt\" to user.blockedAt?.toOffset(),\n}\n"}`)
+	if !strings.Contains(out, "1 lines added, 1 removed") {
+		t.Fatalf("diff: %s", out)
+	}
+	if out, _ := tl.Run(ctx, "write", `{"path":"N.kt","content":"x"}`); !strings.Contains(out, "new file") {
+		t.Fatalf("new: %s", out)
+	}
+}
+
+func TestJUnitOnPipedTest(t *testing.T) {
+	dir := t.TempDir()
+	rep := filepath.Join(dir, "build", "test-results", "test")
+	os.MkdirAll(rep, 0o755)
+	tl := &Tools{Cwd: dir}
+	x := `<testsuite><testcase name="bad" classname="a.T"><failure message="boom">e
+	at a.T.bad(T.kt:3)</failure></testcase></testsuite>`
+	cmd := fmt.Sprintf("echo './gradlew test' >/dev/null; cat > %s/TEST-a.T.xml <<'X'\n%s\nX\necho BUILD FAILED | tail -1", rep, x)
+	args, _ := json.Marshal(map[string]any{"command": cmd})
+	out, ok := tl.Run(context.Background(), "bash", string(args))
+	if !ok || !strings.Contains(out, "FAILED a.T.bad: boom") {
+		t.Fatalf("piped: ok=%v %s", ok, out)
+	}
+}

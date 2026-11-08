@@ -28,6 +28,20 @@ type Session struct {
 	cancel   context.CancelFunc
 	running  bool // a run holds mu
 	step     int  // its step
+	waiting  bool // the run waits for the model (another session uses it)
+}
+
+func (s *Session) setWaiting(w bool) {
+	s.wmu.Lock()
+	s.waiting = w
+	s.wmu.Unlock()
+}
+
+// waitingNow reports if the run waits for the model.
+func (s *Session) waitingNow() bool {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return s.waiting
 }
 
 // state reports if a run is going on and at which step.
@@ -40,6 +54,9 @@ func (s *Session) state() (bool, int) {
 func (s *Session) setState(running bool, step int) {
 	s.wmu.Lock()
 	s.running, s.step = running, step
+	if !running {
+		s.waiting = false
+	}
 	s.wmu.Unlock()
 }
 
@@ -102,6 +119,7 @@ type Agent struct {
 	Cfg  Config
 	Gate chan struct{} // one model request at a time across sessions; nil means no gate
 	Save func()        // called after each step, so the session file stays current
+	Wait func(bool)    // called when a request starts and stops waiting at the gate
 }
 
 // chat sends one request through the gate. The model server answers one
@@ -115,9 +133,18 @@ func (a *Agent) chat(ctx context.Context, r Request, onDelta func(Delta) bool, e
 				emit(Event{T: "info", Text: "waiting for the model: a run of another session is using it"})
 				*told = true
 			}
+			if a.Wait != nil {
+				a.Wait(true)
+			}
 			select {
 			case a.Gate <- struct{}{}:
+				if a.Wait != nil {
+					a.Wait(false)
+				}
 			case <-ctx.Done():
+				if a.Wait != nil {
+					a.Wait(false)
+				}
 				return Message{}, Usage{}, ctx.Err()
 			}
 		}
@@ -178,6 +205,7 @@ const systemPrompt = `You are a coding agent. You work in %s on %s. Your tools a
 
 Work in small steps. Read the code before you change it. After each change, build or run the tests and read the result.
 Use bash for ls, grep, find, git, builds and tests. Filter long output with grep, head or tail.
+To check a library API, print its signatures (javap -cp JAR CLASS, go doc PKG.NAME, python -c "help(...)") instead of unpacking its sources.
 Use edit for small changes and write for new files. In edit, copy old exactly from the file and leave out the line numbers.
 Do not ask for permission. Do the task.
 When you finish, reply with a short report: the files you changed, and the result of the last build or test. If you could not finish, say what is left.`
