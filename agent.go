@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -244,7 +245,47 @@ func buildSystem(cwd string, readOnly bool) string {
 		}
 		s += "\n\n# " + f + "\n\n" + strings.TrimSpace(string(b))
 	}
+	if roots := sourceRoots(cwd); len(roots) > 0 {
+		s += "\n\n# Where the code lives (paths from the repo root)\n\n" + strings.Join(roots, "\n")
+	}
 	return s
+}
+
+var rootRe = regexp.MustCompile(`^(.*?/)?src/(main|test|testFixtures|integrationTest)/(kotlin|java|scala|resources|groovy)/`)
+
+var moduleFiles = map[string]bool{"go.mod": true, "package.json": true, "Cargo.toml": true, "pyproject.toml": true,
+	"build.gradle.kts": true, "build.gradle": true, "pom.xml": true}
+
+// sourceRoots lists the source folders and module roots of the git repo
+// that holds cwd, so the model does not guess where a class lives. The list
+// only changes when the layout does, so the prompt cache keeps working.
+func sourceRoots(cwd string) []string {
+	cmd := exec.Command("git", "ls-files", "--full-name", ":/")
+	cmd.Dir = cwd
+	b, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var roots []string
+	add := func(r string) {
+		if !seen[r] && len(roots) < 40 {
+			seen[r] = true
+			roots = append(roots, r)
+		}
+	}
+	for _, f := range strings.Split(string(b), "\n") {
+		if m := rootRe.FindString(f); m != "" {
+			add(m)
+		} else if moduleFiles[filepath.Base(f)] && strings.Contains(f, "/") {
+			add(filepath.Dir(f) + "/ (module)")
+		}
+	}
+	if len(roots) < 2 {
+		return nil
+	}
+	sort.Strings(roots)
+	return roots
 }
 
 // contextFiles returns ~/.qh/AGENTS.md, ~/.qh/notes/REPO.md (REPO is the

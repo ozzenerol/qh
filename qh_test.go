@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -910,5 +911,25 @@ func TestRemoveUnusedImports(t *testing.T) {
 	b, _ := os.ReadFile(f)
 	if string(b) != "package a\n\nimport java.time.Instant\nimport org.y.Thing as Other\n\nclass A(val at: Instant)\n" || len(st.Checks) != 1 {
 		t.Fatalf("file %q checks %q", b, st.Checks)
+	}
+}
+
+func TestSourceRoots(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"common/build.gradle.kts", "common/src/main/kotlin/a/A.kt", "services/auth/src/main/kotlin/b/B.kt",
+		"services/auth/src/test/kotlin/b/BTest.kt", "services/auth/build.gradle.kts", "build.gradle.kts"} {
+		os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644)
+	}
+	g := exec.Command("sh", "-c", "git init -q && git add -A")
+	g.Dir = dir
+	if err := g.Run(); err != nil {
+		t.Skip("no git")
+	}
+	got := strings.Join(sourceRoots(filepath.Join(dir, "services")), "\n")
+	for _, w := range []string{"common/ (module)", "common/src/main/kotlin/", "services/auth/src/main/kotlin/", "services/auth/src/test/kotlin/"} {
+		if !strings.Contains(got, w) {
+			t.Fatalf("missing %q in:\n%s", w, got)
+		}
 	}
 }

@@ -90,7 +90,7 @@ An empty `model` means the first model the server lists. `compact_at` 0 means 80
 
 After the model's final answer, qh can tidy the files the run wrote or edited, before the checks run. `sort_imports` sorts the imports of Kotlin files (IntelliJ layout: other packages, then `java`, `javax`, `kotlin`, then aliases) and Java files (static imports last). `format` maps a file extension to a command, and qh appends the changed files of that type. `repos` sets both for one repo, by the folder name of its git root. The report lists what qh changed. `QH_URL`, `QH_MODEL`, `QH_HOME` and `QH_SOCK` override the file.
 
-The system prompt is about 150 words. qh adds `~/.qh/AGENTS.md`, then `~/.qh/notes/REPO.md` (REPO is the folder name of the git repo that holds the working directory; a good place for API facts and repo notes that should not be committed), then `AGENTS.md` (or `CLAUDE.md` when a directory has no `AGENTS.md`) from `/` down to the working directory.
+The system prompt is about 150 words. qh adds `~/.qh/AGENTS.md`, then `~/.qh/notes/REPO.md` (REPO is the folder name of the git repo that holds the working directory; a good place for API facts and repo notes that should not be committed), then `AGENTS.md` (or `CLAUDE.md` when a directory has no `AGENTS.md`) from `/` down to the working directory. In a git repo it also lists where the code lives: the module roots (folders with `go.mod`, `package.json`, `build.gradle.kts`, `pom.xml` and the like) and the `src/main|test/kotlin|java|...` folders, at most 40 lines, so the model does not guess which module holds a class.
 
 ## Tests
 
