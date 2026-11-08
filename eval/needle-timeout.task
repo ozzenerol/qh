@@ -1,0 +1,112 @@
+Requests to /export time out after 5 seconds, which is too short for big exports. Make the /export timeout 30 seconds. Every other path keeps its timeout.
+
+Done when: `go test ./...` passes.
+-- setup.sh --
+set -e
+names=(billing users orders reports audit search mail files tags notes teams roles plans quotas hooks keys logs jobs carts prices)
+mkdir -p router
+for i in "${!names[@]}"; do
+	n=${names[$i]}
+	mkdir -p "svc/$n"
+	cat > "svc/$n/$n.go" <<EOF
+package $n
+
+import "time"
+
+// Timeout is the request timeout of the /$n endpoints.
+const Timeout = 5 * time.Second
+
+// Handle serves one /$n request.
+func Handle(path string) string {
+	if len(path) > 200 {
+		return "$n: path too long"
+	}
+	return "$n:" + path
+}
+
+// Retry is how long a client waits before it asks /$n again.
+func Retry() time.Duration { return Timeout / 5 }
+EOF
+	cat > "svc/$n/${n}_test.go" <<EOF
+package $n
+
+import "testing"
+
+func TestHandle(t *testing.T) {
+	if Handle("/x") != "$n:/x" {
+		t.Fatal(Handle("/x"))
+	}
+}
+EOF
+done
+{
+	echo 'package router'
+	echo
+	echo 'import ('
+	echo '	"time"'
+	echo
+	for n in "${names[@]}"; do echo "	\"app/svc/$n\""; done
+	echo ')'
+	echo
+	echo '// routes maps each path to its request timeout.'
+	echo 'var routes = map[string]time.Duration{'
+	for n in "${names[@]}"; do echo "	\"/$n\": $n.Timeout,"; done
+	echo '	"/export": exportTimeout(),'
+	echo '}'
+	echo
+	echo '// TimeoutFor returns the timeout of path, or 10s for an unknown path.'
+	echo 'func TimeoutFor(path string) time.Duration {'
+	echo '	if d, ok := routes[path]; ok {'
+	echo '		return d'
+	echo '	}'
+	echo '	return 10 * time.Second'
+	echo '}'
+} > router/router.go
+gofmt -w router/router.go
+cat > router/limits.go <<'EOF'
+package router
+
+import (
+	"time"
+
+	"app/svc/reports"
+)
+
+// exportTimeout is shared with the report pages, which build the same data.
+func exportTimeout() time.Duration {
+	return reports.Timeout
+}
+
+// maxBody is the largest request body in bytes.
+const maxBody = 1 << 20
+EOF
+-- check.sh --
+set -e
+cat > router/zz_eval_test.go <<'EOF'
+package router
+
+import (
+	"testing"
+	"time"
+)
+
+func TestEvalTimeouts(t *testing.T) {
+	if d := TimeoutFor("/export"); d != 30*time.Second {
+		t.Fatalf("/export: %v", d)
+	}
+	for p, d := range routes {
+		if p != "/export" && d != 5*time.Second {
+			t.Errorf("%s: %v", p, d)
+		}
+	}
+	if TimeoutFor("/nope") != 10*time.Second || len(routes) != 21 {
+		t.Fatal("routes changed")
+	}
+}
+EOF
+go vet ./...
+go test -count=1 ./...
+-- go.mod --
+module app
+
+go 1.22

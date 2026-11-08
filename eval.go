@@ -28,6 +28,7 @@ type EvalTask struct {
 	Name   string
 	Prompt string
 	Check  string
+	Setup  string // optional setup.sh, run in the repo before the first commit
 	Files  map[string]string
 }
 
@@ -42,6 +43,8 @@ type EvalResult struct {
 	Output   int     `json:"output_tokens"`
 	Secs     float64 `json:"secs"`
 	Limit    bool    `json:"step_limit,omitempty"`
+	Explores int     `json:"explore_runs,omitempty"`
+	ExpSteps int     `json:"explore_steps,omitempty"`
 	Error    string  `json:"error,omitempty"`
 	CheckOut string  `json:"check_output,omitempty"`
 }
@@ -51,6 +54,7 @@ type EvalFile struct {
 	Version string       `json:"version"`
 	Commit  string       `json:"commit,omitempty"`
 	Model   string       `json:"model"`
+	Explore bool         `json:"explore"`
 	Results []EvalResult `json:"results"`
 }
 
@@ -62,6 +66,8 @@ func parseTask(name, src string) (EvalTask, error) {
 			t.Prompt = strings.TrimSpace(body.String())
 		} else if cur == "check.sh" {
 			t.Check = body.String()
+		} else if cur == "setup.sh" {
+			t.Setup = body.String()
 		} else {
 			t.Files[cur] = body.String()
 		}
@@ -113,6 +119,13 @@ func setupRepo(t EvalTask, dir string) error {
 			return err
 		}
 	}
+	if t.Setup != "" {
+		cmd := exec.Command("bash", "-c", t.Setup)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("setup.sh: %v: %s", err, out)
+		}
+	}
 	cmd := exec.Command("sh", "-c", "git init -q && git add -A && git -c user.name=eval -c user.email=eval@localhost commit -qm start")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -147,6 +160,7 @@ func (a *Agent) runTask(ctx context.Context, t EvalTask, run int, timeout time.D
 			fmt.Fprintf(log, "  error: %s\n", e.Text)
 		}
 	})
+	r.Explores, r.ExpSteps = st.Explores, st.ExploreSteps
 	r.Steps, r.ToolErrs, r.Prompt, r.Fresh, r.Output, r.Secs, r.Limit = st.Steps, st.ToolErrs, st.Prompt, st.Fresh, st.Output, st.Secs, st.Limit
 	if ctx.Err() != nil {
 		r.Error = "timeout"
@@ -202,6 +216,9 @@ func resultLine(r EvalResult) string {
 	}
 	if r.Error != "" {
 		extra += "  " + r.Error
+	}
+	if r.Explores > 0 {
+		extra += fmt.Sprintf("  explore %d/%d steps", r.Explores, r.ExpSteps)
 	}
 	return fmt.Sprintf("%s %-22s run %d  steps %3d  errs %2d  ctx %6d  fresh %7d  out %6d  %5.0fs%s",
 		v, r.Task, r.Run, r.Steps, r.ToolErrs, r.Prompt, r.Fresh, r.Output, r.Secs, extra)
@@ -310,7 +327,7 @@ func compareEval(w io.Writer, pa, pb string) error {
 		}
 	}
 	sort.Strings(names)
-	fmt.Fprintf(w, "A %s %s %s\nB %s %s %s\n", fa.Date, fa.Commit, fa.Model, fb.Date, fb.Commit, fb.Model)
+	fmt.Fprintf(w, "A %s %s %s explore=%v\nB %s %s %s explore=%v\n", fa.Date, fa.Commit, fa.Model, fa.Explore, fb.Date, fb.Commit, fb.Model, fb.Explore)
 	ta, tb := &evalAgg{}, &evalAgg{}
 	for _, n := range names {
 		fmt.Fprintf(w, "%-22s A %s | B %s\n", n, ma[n], mb[n])
@@ -337,6 +354,7 @@ func evalCmd(args []string) error {
 	timeout := fset.Duration("timeout", 20*time.Minute, "time limit per task")
 	verbose := fset.Bool("v", false, "print each tool call")
 	list := fset.Bool("list", false, "list the tasks")
+	noExplore := fset.Bool("noexplore", false, "turn the explore tool off (same as \"explore\": false in the config)")
 	compare := fset.Bool("compare", false, "compare two result files: qh eval -compare A.json B.json")
 	fset.Parse(args)
 	if *compare {
@@ -373,6 +391,10 @@ func evalCmd(args []string) error {
 	if err := llm.ResolveModel(ctx); err != nil {
 		return err
 	}
+	if *noExplore {
+		off := false
+		cfg.Explore = &off
+	}
 	a := &Agent{LLM: llm, Cfg: cfg}
 	log := io.Discard
 	if *verbose {
@@ -380,7 +402,7 @@ func evalCmd(args []string) error {
 	}
 	rs, err := a.runEval(ctx, tasks, names, *n, *timeout, os.Stdout, log)
 	if len(rs) > 0 {
-		p, werr := saveEval(EvalFile{Date: time.Now().Format(time.RFC3339), Version: version, Commit: buildCommit(), Model: filepath.Base(llm.Model), Results: rs})
+		p, werr := saveEval(EvalFile{Date: time.Now().Format(time.RFC3339), Version: version, Commit: buildCommit(), Model: filepath.Base(llm.Model), Explore: a.exploreOn(), Results: rs})
 		if werr != nil {
 			return werr
 		}
