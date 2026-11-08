@@ -1,0 +1,850 @@
+Discount in store.go should give 10% off for 100 or more items, but an order of exactly 100 items pays full price. Fix it and add a test for 99, 100 and 101 items.
+
+Done when: `go test ./...` passes.
+-- check.sh --
+set -e
+cat > zz_eval_test.go <<'EOF'
+package store
+
+import "testing"
+
+func TestEvalDiscount(t *testing.T) {
+	for items, want := range map[int]int{1: 1000, 99: 1000, 100: 900, 101: 900, 500: 900} {
+		if got := Discount(1000, items); got != want {
+			t.Errorf("Discount(1000, %d) = %d; want %d", items, got, want)
+		}
+	}
+	if Field3("a, b, c, d ,e") != "d" {
+		t.Error("Field3 changed")
+	}
+}
+EOF
+go vet ./...
+go test -count=1 ./...
+-- go.mod --
+module store
+
+go 1.22
+-- store.go --
+package store
+
+import "strings"
+
+// Field0 returns field 0 of a comma line, trimmed.
+func Field0(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
+}
+
+// Field1 returns field 1 of a comma line, trimmed.
+func Field1(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 1 {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+// Field2 returns field 2 of a comma line, trimmed.
+func Field2(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[2])
+}
+
+// Field3 returns field 3 of a comma line, trimmed.
+func Field3(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 3 {
+		return ""
+	}
+	return strings.TrimSpace(parts[3])
+}
+
+// Field4 returns field 4 of a comma line, trimmed.
+func Field4(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 4 {
+		return ""
+	}
+	return strings.TrimSpace(parts[4])
+}
+
+// Field5 returns field 5 of a comma line, trimmed.
+func Field5(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 5 {
+		return ""
+	}
+	return strings.TrimSpace(parts[5])
+}
+
+// Field6 returns field 6 of a comma line, trimmed.
+func Field6(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 6 {
+		return ""
+	}
+	return strings.TrimSpace(parts[6])
+}
+
+// Field7 returns field 7 of a comma line, trimmed.
+func Field7(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 7 {
+		return ""
+	}
+	return strings.TrimSpace(parts[7])
+}
+
+// Field8 returns field 8 of a comma line, trimmed.
+func Field8(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 8 {
+		return ""
+	}
+	return strings.TrimSpace(parts[8])
+}
+
+// Field9 returns field 9 of a comma line, trimmed.
+func Field9(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 9 {
+		return ""
+	}
+	return strings.TrimSpace(parts[9])
+}
+
+// Field10 returns field 10 of a comma line, trimmed.
+func Field10(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 10 {
+		return ""
+	}
+	return strings.TrimSpace(parts[10])
+}
+
+// Field11 returns field 11 of a comma line, trimmed.
+func Field11(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 11 {
+		return ""
+	}
+	return strings.TrimSpace(parts[11])
+}
+
+// Field12 returns field 12 of a comma line, trimmed.
+func Field12(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 12 {
+		return ""
+	}
+	return strings.TrimSpace(parts[12])
+}
+
+// Field13 returns field 13 of a comma line, trimmed.
+func Field13(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 13 {
+		return ""
+	}
+	return strings.TrimSpace(parts[13])
+}
+
+// Field14 returns field 14 of a comma line, trimmed.
+func Field14(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 14 {
+		return ""
+	}
+	return strings.TrimSpace(parts[14])
+}
+
+// Field15 returns field 15 of a comma line, trimmed.
+func Field15(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 15 {
+		return ""
+	}
+	return strings.TrimSpace(parts[15])
+}
+
+// Field16 returns field 16 of a comma line, trimmed.
+func Field16(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 16 {
+		return ""
+	}
+	return strings.TrimSpace(parts[16])
+}
+
+// Field17 returns field 17 of a comma line, trimmed.
+func Field17(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 17 {
+		return ""
+	}
+	return strings.TrimSpace(parts[17])
+}
+
+// Field18 returns field 18 of a comma line, trimmed.
+func Field18(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 18 {
+		return ""
+	}
+	return strings.TrimSpace(parts[18])
+}
+
+// Field19 returns field 19 of a comma line, trimmed.
+func Field19(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 19 {
+		return ""
+	}
+	return strings.TrimSpace(parts[19])
+}
+
+// Field20 returns field 20 of a comma line, trimmed.
+func Field20(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 20 {
+		return ""
+	}
+	return strings.TrimSpace(parts[20])
+}
+
+// Field21 returns field 21 of a comma line, trimmed.
+func Field21(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 21 {
+		return ""
+	}
+	return strings.TrimSpace(parts[21])
+}
+
+// Field22 returns field 22 of a comma line, trimmed.
+func Field22(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 22 {
+		return ""
+	}
+	return strings.TrimSpace(parts[22])
+}
+
+// Field23 returns field 23 of a comma line, trimmed.
+func Field23(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 23 {
+		return ""
+	}
+	return strings.TrimSpace(parts[23])
+}
+
+// Field24 returns field 24 of a comma line, trimmed.
+func Field24(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 24 {
+		return ""
+	}
+	return strings.TrimSpace(parts[24])
+}
+
+// Field25 returns field 25 of a comma line, trimmed.
+func Field25(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 25 {
+		return ""
+	}
+	return strings.TrimSpace(parts[25])
+}
+
+// Field26 returns field 26 of a comma line, trimmed.
+func Field26(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 26 {
+		return ""
+	}
+	return strings.TrimSpace(parts[26])
+}
+
+// Field27 returns field 27 of a comma line, trimmed.
+func Field27(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 27 {
+		return ""
+	}
+	return strings.TrimSpace(parts[27])
+}
+
+// Field28 returns field 28 of a comma line, trimmed.
+func Field28(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 28 {
+		return ""
+	}
+	return strings.TrimSpace(parts[28])
+}
+
+// Field29 returns field 29 of a comma line, trimmed.
+func Field29(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 29 {
+		return ""
+	}
+	return strings.TrimSpace(parts[29])
+}
+
+// Field30 returns field 30 of a comma line, trimmed.
+func Field30(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 30 {
+		return ""
+	}
+	return strings.TrimSpace(parts[30])
+}
+
+// Field31 returns field 31 of a comma line, trimmed.
+func Field31(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 31 {
+		return ""
+	}
+	return strings.TrimSpace(parts[31])
+}
+
+// Field32 returns field 32 of a comma line, trimmed.
+func Field32(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 32 {
+		return ""
+	}
+	return strings.TrimSpace(parts[32])
+}
+
+// Field33 returns field 33 of a comma line, trimmed.
+func Field33(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 33 {
+		return ""
+	}
+	return strings.TrimSpace(parts[33])
+}
+
+// Field34 returns field 34 of a comma line, trimmed.
+func Field34(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 34 {
+		return ""
+	}
+	return strings.TrimSpace(parts[34])
+}
+
+// Field35 returns field 35 of a comma line, trimmed.
+func Field35(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 35 {
+		return ""
+	}
+	return strings.TrimSpace(parts[35])
+}
+
+// Field36 returns field 36 of a comma line, trimmed.
+func Field36(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 36 {
+		return ""
+	}
+	return strings.TrimSpace(parts[36])
+}
+
+// Field37 returns field 37 of a comma line, trimmed.
+func Field37(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 37 {
+		return ""
+	}
+	return strings.TrimSpace(parts[37])
+}
+
+// Field38 returns field 38 of a comma line, trimmed.
+func Field38(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 38 {
+		return ""
+	}
+	return strings.TrimSpace(parts[38])
+}
+
+// Field39 returns field 39 of a comma line, trimmed.
+func Field39(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 39 {
+		return ""
+	}
+	return strings.TrimSpace(parts[39])
+}
+
+// Field40 returns field 40 of a comma line, trimmed.
+func Field40(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 40 {
+		return ""
+	}
+	return strings.TrimSpace(parts[40])
+}
+
+// Field41 returns field 41 of a comma line, trimmed.
+func Field41(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 41 {
+		return ""
+	}
+	return strings.TrimSpace(parts[41])
+}
+
+// Field42 returns field 42 of a comma line, trimmed.
+func Field42(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 42 {
+		return ""
+	}
+	return strings.TrimSpace(parts[42])
+}
+
+// Field43 returns field 43 of a comma line, trimmed.
+func Field43(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 43 {
+		return ""
+	}
+	return strings.TrimSpace(parts[43])
+}
+
+// Field44 returns field 44 of a comma line, trimmed.
+func Field44(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 44 {
+		return ""
+	}
+	return strings.TrimSpace(parts[44])
+}
+
+// Field45 returns field 45 of a comma line, trimmed.
+func Field45(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 45 {
+		return ""
+	}
+	return strings.TrimSpace(parts[45])
+}
+
+// Field46 returns field 46 of a comma line, trimmed.
+func Field46(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 46 {
+		return ""
+	}
+	return strings.TrimSpace(parts[46])
+}
+
+// Field47 returns field 47 of a comma line, trimmed.
+func Field47(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 47 {
+		return ""
+	}
+	return strings.TrimSpace(parts[47])
+}
+
+// Field48 returns field 48 of a comma line, trimmed.
+func Field48(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 48 {
+		return ""
+	}
+	return strings.TrimSpace(parts[48])
+}
+
+// Field49 returns field 49 of a comma line, trimmed.
+func Field49(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 49 {
+		return ""
+	}
+	return strings.TrimSpace(parts[49])
+}
+
+// Field50 returns field 50 of a comma line, trimmed.
+func Field50(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 50 {
+		return ""
+	}
+	return strings.TrimSpace(parts[50])
+}
+
+// Field51 returns field 51 of a comma line, trimmed.
+func Field51(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 51 {
+		return ""
+	}
+	return strings.TrimSpace(parts[51])
+}
+
+// Field52 returns field 52 of a comma line, trimmed.
+func Field52(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 52 {
+		return ""
+	}
+	return strings.TrimSpace(parts[52])
+}
+
+// Field53 returns field 53 of a comma line, trimmed.
+func Field53(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 53 {
+		return ""
+	}
+	return strings.TrimSpace(parts[53])
+}
+
+// Field54 returns field 54 of a comma line, trimmed.
+func Field54(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 54 {
+		return ""
+	}
+	return strings.TrimSpace(parts[54])
+}
+
+// Field55 returns field 55 of a comma line, trimmed.
+func Field55(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 55 {
+		return ""
+	}
+	return strings.TrimSpace(parts[55])
+}
+
+// Discount is the price in cents after the bulk discount: 10% off
+// for 100 or more items.
+func Discount(cents, items int) int {
+	if items > 100 {
+		return cents * 90 / 100
+	}
+	return cents
+}
+
+// Field56 returns field 56 of a comma line, trimmed.
+func Field56(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 56 {
+		return ""
+	}
+	return strings.TrimSpace(parts[56])
+}
+
+// Field57 returns field 57 of a comma line, trimmed.
+func Field57(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 57 {
+		return ""
+	}
+	return strings.TrimSpace(parts[57])
+}
+
+// Field58 returns field 58 of a comma line, trimmed.
+func Field58(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 58 {
+		return ""
+	}
+	return strings.TrimSpace(parts[58])
+}
+
+// Field59 returns field 59 of a comma line, trimmed.
+func Field59(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 59 {
+		return ""
+	}
+	return strings.TrimSpace(parts[59])
+}
+
+// Field60 returns field 60 of a comma line, trimmed.
+func Field60(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 60 {
+		return ""
+	}
+	return strings.TrimSpace(parts[60])
+}
+
+// Field61 returns field 61 of a comma line, trimmed.
+func Field61(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 61 {
+		return ""
+	}
+	return strings.TrimSpace(parts[61])
+}
+
+// Field62 returns field 62 of a comma line, trimmed.
+func Field62(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 62 {
+		return ""
+	}
+	return strings.TrimSpace(parts[62])
+}
+
+// Field63 returns field 63 of a comma line, trimmed.
+func Field63(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 63 {
+		return ""
+	}
+	return strings.TrimSpace(parts[63])
+}
+
+// Field64 returns field 64 of a comma line, trimmed.
+func Field64(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 64 {
+		return ""
+	}
+	return strings.TrimSpace(parts[64])
+}
+
+// Field65 returns field 65 of a comma line, trimmed.
+func Field65(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 65 {
+		return ""
+	}
+	return strings.TrimSpace(parts[65])
+}
+
+// Field66 returns field 66 of a comma line, trimmed.
+func Field66(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 66 {
+		return ""
+	}
+	return strings.TrimSpace(parts[66])
+}
+
+// Field67 returns field 67 of a comma line, trimmed.
+func Field67(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 67 {
+		return ""
+	}
+	return strings.TrimSpace(parts[67])
+}
+
+// Field68 returns field 68 of a comma line, trimmed.
+func Field68(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 68 {
+		return ""
+	}
+	return strings.TrimSpace(parts[68])
+}
+
+// Field69 returns field 69 of a comma line, trimmed.
+func Field69(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 69 {
+		return ""
+	}
+	return strings.TrimSpace(parts[69])
+}
+
+// Field70 returns field 70 of a comma line, trimmed.
+func Field70(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 70 {
+		return ""
+	}
+	return strings.TrimSpace(parts[70])
+}
+
+// Field71 returns field 71 of a comma line, trimmed.
+func Field71(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 71 {
+		return ""
+	}
+	return strings.TrimSpace(parts[71])
+}
+
+// Field72 returns field 72 of a comma line, trimmed.
+func Field72(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 72 {
+		return ""
+	}
+	return strings.TrimSpace(parts[72])
+}
+
+// Field73 returns field 73 of a comma line, trimmed.
+func Field73(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 73 {
+		return ""
+	}
+	return strings.TrimSpace(parts[73])
+}
+
+// Field74 returns field 74 of a comma line, trimmed.
+func Field74(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 74 {
+		return ""
+	}
+	return strings.TrimSpace(parts[74])
+}
+
+// Field75 returns field 75 of a comma line, trimmed.
+func Field75(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 75 {
+		return ""
+	}
+	return strings.TrimSpace(parts[75])
+}
+
+// Field76 returns field 76 of a comma line, trimmed.
+func Field76(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 76 {
+		return ""
+	}
+	return strings.TrimSpace(parts[76])
+}
+
+// Field77 returns field 77 of a comma line, trimmed.
+func Field77(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 77 {
+		return ""
+	}
+	return strings.TrimSpace(parts[77])
+}
+
+// Field78 returns field 78 of a comma line, trimmed.
+func Field78(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 78 {
+		return ""
+	}
+	return strings.TrimSpace(parts[78])
+}
+
+// Field79 returns field 79 of a comma line, trimmed.
+func Field79(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 79 {
+		return ""
+	}
+	return strings.TrimSpace(parts[79])
+}
+
+// Field80 returns field 80 of a comma line, trimmed.
+func Field80(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 80 {
+		return ""
+	}
+	return strings.TrimSpace(parts[80])
+}
+
+// Field81 returns field 81 of a comma line, trimmed.
+func Field81(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 81 {
+		return ""
+	}
+	return strings.TrimSpace(parts[81])
+}
+
+// Field82 returns field 82 of a comma line, trimmed.
+func Field82(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 82 {
+		return ""
+	}
+	return strings.TrimSpace(parts[82])
+}
+
+// Field83 returns field 83 of a comma line, trimmed.
+func Field83(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 83 {
+		return ""
+	}
+	return strings.TrimSpace(parts[83])
+}
+
+// Field84 returns field 84 of a comma line, trimmed.
+func Field84(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 84 {
+		return ""
+	}
+	return strings.TrimSpace(parts[84])
+}
+
+// Field85 returns field 85 of a comma line, trimmed.
+func Field85(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 85 {
+		return ""
+	}
+	return strings.TrimSpace(parts[85])
+}
+
+// Field86 returns field 86 of a comma line, trimmed.
+func Field86(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 86 {
+		return ""
+	}
+	return strings.TrimSpace(parts[86])
+}
+
+// Field87 returns field 87 of a comma line, trimmed.
+func Field87(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 87 {
+		return ""
+	}
+	return strings.TrimSpace(parts[87])
+}
+
+// Field88 returns field 88 of a comma line, trimmed.
+func Field88(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 88 {
+		return ""
+	}
+	return strings.TrimSpace(parts[88])
+}
+
+// Field89 returns field 89 of a comma line, trimmed.
+func Field89(line string) string {
+	parts := strings.Split(line, ",")
+	if len(parts) <= 89 {
+		return ""
+	}
+	return strings.TrimSpace(parts[89])
+}

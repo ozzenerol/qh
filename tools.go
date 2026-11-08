@@ -20,6 +20,8 @@ import (
 const (
 	maxToolOut  = 12000 // chars of tool output sent to the model
 	readDefault = 400   // lines that read returns without a limit
+	readHead    = 200   // lines of a bigger file that a read with no range returns, with an outline
+	readAuto    = -1    // limit value: no offset or limit given
 )
 
 func toolSchemas(readOnly bool) []map[string]any {
@@ -164,7 +166,11 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 			return e, false
 		}
 		p, _ := s("path")
-		out, ok := t.read(t.path(p), n("offset", 1), n("limit", readDefault))
+		lim := n("limit", readDefault)
+		if args["offset"] == nil && args["limit"] == nil {
+			lim = readAuto
+		}
+		out, ok := t.read(t.path(p), n("offset", 1), lim)
 		if !ok && strings.Contains(out, "no such file") {
 			// One clear candidate: read it at once, so the guess does not
 			// cost a step. Several: list them.
@@ -319,7 +325,11 @@ func (t *Tools) read(fp string, off, limit int) (string, bool) {
 	if off < 1 {
 		off = 1
 	}
-	if limit <= 0 {
+	big := limit == readAuto && len(lines) > readDefault
+	switch {
+	case big:
+		limit = readHead
+	case limit <= 0:
 		limit = readDefault
 	}
 	if off > len(lines) {
@@ -340,6 +350,11 @@ func (t *Tools) read(fp string, off, limit int) (string, bool) {
 	}
 	if end < len(lines) {
 		fmt.Fprintf(&out, "[lines %d-%d of %d; use offset=%d for more]\n", off, end, len(lines), end+1)
+	}
+	if big && end < len(lines) {
+		if o := outline(lines, end+1, 80); len(o) > 0 {
+			fmt.Fprintf(&out, "[outline of lines %d-%d; read with offset for the part you need]\n%s\n", end+1, len(lines), strings.Join(o, "\n"))
+		}
 	}
 	return out.String(), true
 }
@@ -717,10 +732,17 @@ func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration)
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		err = <-done
 	}
-	res := clip(out.String())
 	code := 0
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()
+	}
+	raw, dropped := out.String(), 0
+	if code == 0 && ctx.Err() == nil {
+		raw, dropped = dropBuildNoise(command, raw)
+	}
+	res := clip(raw)
+	if dropped > 0 {
+		res = strings.TrimRight(res, "\n") + fmt.Sprintf("\n[qh: %d Gradle/Maven progress and task lines left out]", dropped)
 	}
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:

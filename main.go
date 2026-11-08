@@ -280,6 +280,11 @@ func statLine(st *Stats) string {
 	}
 	line := fmt.Sprintf("%s: %d steps, %d tool errors, %d tokens out, %.0fs (%.1f tok/s overall), context %d tokens",
 		st.Model, st.Steps, st.ToolErrs, st.Output, st.Secs, tps, st.Prompt)
+	if st.Prompt > 40000 {
+		if top := ctxTop(st.Ctx, st.Prompt); top != "" {
+			line += " (ctx: " + top + ")"
+		}
+	}
 	if st.Explores > 0 {
 		line += fmt.Sprintf(", explore: %d runs, %d steps, %d tokens out", st.Explores, st.ExploreSteps, st.ExploreOut)
 	}
