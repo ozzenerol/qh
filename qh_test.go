@@ -698,3 +698,10 @@ func TestGrepLineHintDidYouMean(t *testing.T) {
 		t.Fatalf("did you mean: %s", out)
 	}
 }
+
+func TestFailLineGradleOrder(t *testing.T) {
+	out := "> Task :common:compileTestKotlin FAILED\ne: file:///a/MailTest.kt:12:5 Unresolved reference: subject\nFAILURE: Build failed with an exception.\n[exit 1]"
+	if got := failLine(out); !strings.Contains(got, "Unresolved reference") {
+		t.Fatalf("failLine: %q", got)
+	}
+}

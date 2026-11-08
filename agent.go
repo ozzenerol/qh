@@ -676,6 +676,8 @@ func warningLines(out string) []string {
 	return w
 }
 
+var strongErr = regexp.MustCompile(`^e: |^\S+:\d+(:\d+)?:? (error|fatal)|\berror:|Exception:|Error:|panic:|expected:|AssertionFailed`)
+
 var errWords = regexp.MustCompile(`(?i)\berror\b|error:|\bfailed\b|failure|exception|panic|cannot|not found|denied|^e: `)
 
 // failLine picks the line that says what went wrong in the output of a
@@ -687,9 +689,12 @@ func failLine(s string) string {
 	if n := len(lines); n > 1 && strings.HasPrefix(lines[n-1], "[exit ") {
 		exit, lines = " "+lines[n-1], lines[:n-1]
 	}
-	for _, l := range lines {
-		if errWords.MatchString(l) {
-			return oneLine(l, 140) + exit
+	// A compiler or test message beats a generic "FAILED" line.
+	for _, re := range []*regexp.Regexp{strongErr, errWords} {
+		for _, l := range lines {
+			if re.MatchString(l) {
+				return oneLine(l, 140) + exit
+			}
 		}
 	}
 	for i := len(lines) - 1; i >= 0; i-- {
