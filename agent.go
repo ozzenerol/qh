@@ -168,7 +168,7 @@ func (a *Agent) chat(ctx context.Context, r Request, onDelta func(Delta) bool, e
 	return a.LLM.Chat(ctx, r, onDelta)
 }
 
-const selfCheckAsk = `Before you report, read the task again, mainly its "Done when" part and every numbered or bulleted requirement. For each one, say done or not done. Fix every item that is not done. Then give the final report.`
+const selfCheckAsk = `Before you report, read the task again, mainly its "Done when" part and every numbered or bulleted requirement. For each one, say done or not done. For each numeric rule in the task (a range, a minimum or maximum, a limit, a default), name the file and line that enforces it, and check what happens at and past the edge. Fix every item that is not done. Then give the final report.`
 
 // doneWhen returns the "Done when" part of a task, or "".
 func doneWhen(prompt string) string {
@@ -324,6 +324,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	schemas := toolSchemas(s.ReadOnly)
 	system := Message{Role: "system", Content: buildSystem(s.Cwd, s.ReadOnly)}
 	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})
+	if a.Save != nil {
+		a.Save()
+	}
 	seen := map[string]int{}
 	told := false
 	ended := false // the model gave its final answer

@@ -29,6 +29,7 @@ usage:
   qh -r [name]                 pick a session to resume, or resume NAME
   qh run [flags] "task"        run one task and print the report (task "-" reads stdin)
   qh sessions                  list the sessions
+  qh wait [-s session] [-q]    wait for the run on a session to end, then print its report and stats
   qh compact [-s session] [focus]  replace the history with a summary
   qh reset [-s session]        clear a session
   qh serve                     run the daemon in the foreground
@@ -66,6 +67,12 @@ func main() {
 		err = runCmd(args)
 	case "serve":
 		err = serve()
+	case "wait":
+		fs := flag.NewFlagSet("wait", flag.ExitOnError)
+		name := fs.String("s", "main", "session")
+		q := fs.Bool("q", false, "print only the stats line")
+		fs.Parse(args)
+		err = waitCmd(*name, *q)
 	case "sessions":
 		err = simple(ClientReq{Op: "sessions"})
 	case "compact":
@@ -351,6 +358,56 @@ func runCmd(args []string) error {
 		os.Exit(4)
 	}
 	return nil
+}
+
+// waitCmd blocks until the run on a session ends, then prints its report
+// and stats line like qh run. It exits 4 at the step limit.
+func waitCmd(session string, quiet bool) error {
+	running := func() bool {
+		c, dec, err := send(ClientReq{Op: "list"})
+		if err != nil {
+			return false
+		}
+		defer c.Close()
+		var e Event
+		if dec.Decode(&e) != nil {
+			return false
+		}
+		var rows []SessionInfo
+		json.Unmarshal([]byte(e.Text), &rows)
+		for _, r := range rows {
+			if r.Name == session {
+				return r.Running
+			}
+		}
+		return false
+	}
+	c, dec, err := send(ClientReq{Op: "attach", Session: session, From: "qh wait"})
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if !running() {
+		fmt.Fprintln(os.Stderr, "qh: no run on session "+session)
+		return nil
+	}
+	for {
+		var e Event
+		if err := dec.Decode(&e); err != nil {
+			return errors.New("the daemon closed the connection")
+		}
+		if e.Replay || e.T != "done" {
+			continue
+		}
+		if !quiet {
+			fmt.Println(e.Text)
+		}
+		fmt.Fprintln(os.Stderr, statLine(e.Stats))
+		if e.Stats != nil && e.Stats.Limit {
+			os.Exit(4)
+		}
+		return nil
+	}
 }
 
 func compactCmd(session, focus string) error {
