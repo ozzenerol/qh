@@ -127,11 +127,12 @@ type Stats struct {
 	Retries      int            `json:"retries"`
 	Window       int            `json:"window"`
 	ToolErrs     int            `json:"tool_errors"`
-	CmdFails     int            `json:"failed_commands"`       // commands that ran and exited non-zero (failing builds and tests); not in ToolErrs
-	Limit        bool           `json:"step_limit,omitempty"`  // the run stopped at max_steps
-	Checks       []string       `json:"checks,omitempty"`      // results of the "Done when" commands
-	Todo         []string       `json:"todo_open,omitempty"`   // todo items not done at the end
-	Ctx          map[string]int `json:"ctx_by_tool,omitempty"` // tokens (chars/4) of tool results in the context at the end, per tool
+	CmdFails     int            `json:"failed_commands"`         // commands that ran and exited non-zero (failing builds and tests); not in ToolErrs
+	Limit        bool           `json:"step_limit,omitempty"`    // the run stopped at max_steps
+	Checks       []string       `json:"checks,omitempty"`        // results of the "Done when" commands
+	Todo         []string       `json:"todo_open,omitempty"`     // todo items not done at the end
+	ThinkDropped int            `json:"think_dropped,omitempty"` // tokens of earlier turns' thinking removed at the start
+	Ctx          map[string]int `json:"ctx_by_tool,omitempty"`   // tokens (chars/4) of tool results in the context at the end, per tool
 }
 
 type Event struct {
@@ -417,6 +418,11 @@ func looping(s string) bool {
 func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit func(Event)) Stats {
 	t0 := time.Now()
 	st := Stats{Model: filepath.Base(a.LLM.Model), Window: a.Cfg.Context}
+	if n := dropOldThinking(s.Msgs); n > 0 {
+		st.ThinkDropped = n
+		s.LastPrompt = max(0, s.LastPrompt-n)
+		emit(Event{T: "info", Text: fmt.Sprintf("dropped %d tokens of thinking from earlier turns", n)})
+	}
 	if s.LastPrompt > a.compactAt() {
 		if err := a.Compact(ctx, s, "", emit); err != nil {
 			emit(Event{T: "error", Text: "compaction failed: " + err.Error()})
