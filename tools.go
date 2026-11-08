@@ -61,6 +61,10 @@ func toolSchemas(readOnly bool) []map[string]any {
 type Tools struct {
 	Cwd      string
 	ReadOnly bool
+
+	Diag        map[string]string    // file extension -> checker command run after a write or edit
+	DiagTimeout time.Duration        // per check
+	Seen        map[string]*fileSeen // path -> what qh last showed the model of it
 }
 
 func (t *Tools) path(p string) string {
@@ -186,7 +190,8 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		}
 		p, _ := s("path")
 		c, _ := s("content")
-		return t.write(t.path(p), p, c)
+		out, ok := t.write(t.path(p), p, c)
+		return t.withDiag(out, ok, t.path(p), p)
 	case "edit":
 		// Names other agents use for the same fields.
 		for alias, k := range map[string]string{"old_string": "old", "new_string": "new", "old_text": "old", "new_text": "new",
@@ -203,6 +208,7 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 				}
 				p, _ := s("path")
 				out, ok := t.write(t.path(p), p, c)
+				out, ok = t.withDiag(out, ok, t.path(p), p)
 				return "note: edit got content and no old, so qh wrote the whole file; use write for that.\n" + out, ok
 			}
 		}
@@ -230,6 +236,7 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		nw, _ := s("new")
 		all := args["all"] == true || args["all"] == "true"
 		out, ok := t.edit(t.path(p), p, o, nw, all, n("line", 0))
+		out, ok = t.withDiag(out, ok, t.path(p), p)
 		return note + out, ok
 	case "bash":
 		if e := need("command"); e != "" {
@@ -240,6 +247,8 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		if to <= 0 || to > 900 {
 			to = 900
 		}
+		before := t.mtimes()
+		defer t.refreshChanged(before)
 		return t.bash(ctx, c, time.Duration(to)*time.Second)
 	}
 	if t.ReadOnly {
@@ -279,6 +288,7 @@ func (t *Tools) read(fp string, off, limit int) (string, bool) {
 	if bytes.IndexByte(b[:min(len(b), 8000)], 0) >= 0 {
 		return fmt.Sprintf("error: %s is a binary file (%d bytes)", fp, len(b)), false
 	}
+	t.saw(fp, string(b))
 	lines := strings.Split(string(b), "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
@@ -312,6 +322,9 @@ func (t *Tools) read(fp string, off, limit int) (string, bool) {
 }
 
 func (t *Tools) write(fp, shown, c string) (string, bool) {
+	if e := t.stale(fp, shown, true); e != "" {
+		return e, false
+	}
 	prev, hadFile := os.ReadFile(fp)
 	if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
 		return "error: " + err.Error(), false
@@ -319,6 +332,7 @@ func (t *Tools) write(fp, shown, c string) (string, bool) {
 	if err := os.WriteFile(fp, []byte(c), 0o644); err != nil {
 		return "error: " + err.Error(), false
 	}
+	t.saw(fp, c)
 	n := strings.Count(c, "\n") + 1
 	if hadFile != nil {
 		return fmt.Sprintf("wrote %s (%d lines, new file)", shown, n), true
@@ -351,6 +365,9 @@ func lineDiff(a, b string) (add, del int) {
 }
 
 func (t *Tools) edit(fp, shown, old, nw string, all bool, near int) (string, bool) {
+	if e := t.stale(fp, shown, false); e != "" {
+		return e, false
+	}
 	b, err := os.ReadFile(fp)
 	if err != nil {
 		return "error: " + err.Error(), false
@@ -398,6 +415,7 @@ func (t *Tools) edit(fp, shown, old, nw string, all bool, near int) (string, boo
 	if err := os.WriteFile(fp, []byte(src), 0o644); err != nil {
 		return "error: " + err.Error(), false
 	}
+	t.saw(fp, src)
 	return fmt.Sprintf("edited %s at line %d (%d replacement(s))", shown, line, max(1, cnt*boolInt(all))), true
 }
 

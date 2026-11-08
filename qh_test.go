@@ -625,6 +625,7 @@ func TestNearestFuzzyAndWriteDiff(t *testing.T) {
 	if ok || !strings.Contains(out, "look like it") || !strings.Contains(out, "2\t") {
 		t.Fatalf("fuzzy: %s", out)
 	}
+	tl.Run(ctx, "read", `{"path":"R.kt"}`)
 	out, _ = tl.Run(ctx, "write", `{"path":"R.kt","content":"class R {\n    \"verifiedAt\" to 1,\n    \"blockedAt\" to user.blockedAt?.toOffset(),\n}\n"}`)
 	if !strings.Contains(out, "1 lines added, 1 removed") {
 		t.Fatalf("diff: %s", out)

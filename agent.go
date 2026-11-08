@@ -35,6 +35,8 @@ type Session struct {
 	step     int    // its step
 	waiting  bool   // the run waits for the model (another session uses it)
 	from     string // who started the run
+
+	seen map[string]*fileSeen // files qh showed the model, for the stale-file guard
 }
 
 func (s *Session) setFrom(f string) {
@@ -405,7 +407,11 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			emit(Event{T: "error", Text: "compaction failed: " + err.Error()})
 		}
 	}
-	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly}
+	if s.seen == nil {
+		s.seen = map[string]*fileSeen{}
+	}
+	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Seen: s.seen}
+	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
 	schemas := toolSchemas(s.ReadOnly)
 	system := Message{Role: "system", Content: buildSystem(s.Cwd, s.ReadOnly)}
 	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})
@@ -747,6 +753,7 @@ func (a *Agent) finalChecks(ctx context.Context, tools *Tools, prompt string, cm
 		// Before the checks, so a wrong removal shows as a failed build.
 		removeUnusedImports(tools.Cwd, changed, st, emit)
 	}
+	tools.Refresh(changed)
 	failed := ""
 	if len(cmds) > 0 {
 		failed = a.runChecks(ctx, tools, cmds, checkExpects(prompt), wantClean, st, emit)
