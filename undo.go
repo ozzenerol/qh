@@ -29,6 +29,8 @@ type Checkpoint struct {
 	idx  map[string]int
 	git  string // git root of Cwd, "" when Cwd is not in a repo
 
+	bgSnaps []*bashSnap // taken when a background command started; applied at the end
+
 	ID       string    `json:"id"`
 	Prompt   string    `json:"prompt"`
 	Cwd      string    `json:"cwd"`
@@ -114,7 +116,13 @@ func (cp *Checkpoint) save() {
 
 // finish notes the state of every touched file and drops old runs.
 func (cp *Checkpoint) finish() {
-	if cp == nil || cp.dir == "" {
+	if cp == nil {
+		return
+	}
+	for _, s := range cp.bgSnaps {
+		cp.bashAfter(s) // the background commands have stopped by now
+	}
+	if cp.dir == "" {
 		return
 	}
 	for i := range cp.Files {

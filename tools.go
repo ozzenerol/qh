@@ -72,6 +72,16 @@ type Tools struct {
 	Seen        map[string]*fileSeen // path -> what qh last showed the model of it
 	BG          *BG                  // background commands of the run; nil means none allowed
 	Undo        *Checkpoint          // the files this run changed, for qh undo; nil keeps nothing
+	Changed     map[string]bool      // files that write and edit changed, whatever the argument names were
+	LastPath    string               // the file of the last successful write or edit
+}
+
+func (t *Tools) wrote(fp string) {
+	if t.Changed == nil {
+		t.Changed = map[string]bool{}
+	}
+	t.Changed[fp] = true
+	t.LastPath = fp
 }
 
 func (t *Tools) path(p string) string {
@@ -266,6 +276,9 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 			if t.BG == nil {
 				return "error: background commands are not available here", false
 			}
+			if t.Undo != nil {
+				t.Undo.bgSnaps = append(t.Undo.bgSnaps, t.Undo.bashBefore())
+			}
 			return t.BG.Start(t.Cwd, c)
 		}
 		before := t.mtimes()
@@ -376,6 +389,7 @@ func (t *Tools) write(fp, shown, c string) (string, bool) {
 		return "error: " + err.Error(), false
 	}
 	t.saw(fp, c)
+	t.wrote(fp)
 	n := strings.Count(c, "\n") + 1
 	if hadFile != nil {
 		return fmt.Sprintf("wrote %s (%d lines, new file)", shown, n), true
@@ -472,6 +486,7 @@ func (t *Tools) edit(fp, shown, old, nw string, all bool, near int) (string, boo
 		return "error: " + err.Error(), false
 	}
 	t.saw(fp, src)
+	t.wrote(fp)
 	return fix + fmt.Sprintf("edited %s at line %d (%d replacement(s))", shown, line, max(1, cnt*boolInt(all))), true
 }
 

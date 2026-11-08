@@ -13,7 +13,7 @@ import (
 // changes, since the cache is lost then anyway.
 // extra goes at the end of the base prompt, before the context files.
 func (s *Session) systemPrompt(extra string) string {
-	key := s.Cwd + "\x00" + strconv.FormatBool(s.ReadOnly) + "\x00" + extra
+	key := s.Cwd + "\x00" + strconv.FormatBool(s.ReadOnly) + "\x00" + extra + "\x00" + promptVersion(s.ReadOnly)
 	if s.System == "" || s.SysKey != key || len(s.Msgs) == 0 {
 		p := buildSystem(s.Cwd, s.ReadOnly)
 		if i := strings.Index(p, "\n\n# "); i >= 0 {
@@ -24,6 +24,17 @@ func (s *Session) systemPrompt(extra string) string {
 		s.System, s.SysKey = p, key
 	}
 	return s.System
+}
+
+// promptVersion changes when the prompt templates or the tool list do, so a
+// session saved by another qh build gets the prompt that names its tools.
+func promptVersion(readOnly bool) string {
+	var b strings.Builder
+	b.WriteString(systemPrompt + systemPromptRO)
+	for _, t := range toolSchemas(readOnly) {
+		b.WriteString("\x00" + t["function"].(map[string]any)["name"].(string))
+	}
+	return strconv.FormatUint(contentHash([]byte(b.String())), 36)
 }
 
 // answerOpen gives every tool call of the last assistant message that has no
