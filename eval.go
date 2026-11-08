@@ -38,8 +38,10 @@ type EvalResult struct {
 	Pass     bool    `json:"pass"`
 	Steps    int     `json:"steps"`
 	ToolErrs int     `json:"tool_errors"`
-	Prompt   int     `json:"prompt_tokens"` // the last request
-	Fresh    int     `json:"fresh_tokens"`  // prompt tokens the server did not have in its cache, all requests
+	CmdFails int     `json:"failed_commands,omitempty"`
+	Requests int     `json:"requests,omitempty"` // model requests (QH_EVAL_BIN runs only)
+	Prompt   int     `json:"prompt_tokens"`      // the last request
+	Fresh    int     `json:"fresh_tokens"`       // prompt tokens the server did not have in its cache, all requests
 	Output   int     `json:"output_tokens"`
 	Secs     float64 `json:"secs"`
 	Limit    bool    `json:"step_limit,omitempty"`
@@ -151,6 +153,17 @@ func (a *Agent) runTask(ctx context.Context, t EvalTask, run int, timeout time.D
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if evalExt != nil {
+		t0 := time.Now()
+		st, err := evalExt.run(ctx, "eval-"+t.Name, repo, t.Prompt, log)
+		evalExt.fill(&r, st, time.Since(t0).Seconds())
+		if ctx.Err() != nil {
+			r.Error = "timeout"
+		} else if err != nil {
+			r.Error = err.Error()
+		}
+		return a.check(t, tmp, repo, r)
+	}
 	s := &Session{Name: "eval-" + t.Name, Cwd: repo, Think: true}
 	st := a.Run(ctx, s, t.Prompt, "eval", func(e Event) {
 		switch e.T {
@@ -162,9 +175,15 @@ func (a *Agent) runTask(ctx context.Context, t EvalTask, run int, timeout time.D
 	})
 	r.Explores, r.ExpSteps = st.Explores, st.ExploreSteps
 	r.Steps, r.ToolErrs, r.Prompt, r.Fresh, r.Output, r.Secs, r.Limit = st.Steps, st.ToolErrs, st.Prompt, st.Fresh, st.Output, st.Secs, st.Limit
+	r.CmdFails = st.CmdFails
 	if ctx.Err() != nil {
 		r.Error = "timeout"
 	}
+	return a.check(t, tmp, repo, r)
+}
+
+// check runs check.sh of the task on the repo and sets r.Pass.
+func (a *Agent) check(t EvalTask, tmp, repo string, r EvalResult) EvalResult {
 	// check.sh lives outside the repo, so the model never sees it.
 	cp := filepath.Join(tmp, "check.sh")
 	os.WriteFile(cp, []byte(t.Check), 0o755)
@@ -396,13 +415,24 @@ func evalCmd(args []string) error {
 		cfg.Explore = &off
 	}
 	a := &Agent{LLM: llm, Cfg: cfg}
+	commit := buildCommit()
+	if bin := os.Getenv("QH_EVAL_BIN"); bin != "" {
+		// Hidden: measure another qh binary through its own daemon.
+		e, err := startExtEval(bin, cfg.URL)
+		if err != nil {
+			return err
+		}
+		defer e.close()
+		evalExt = e
+		commit = "bin:" + bin
+	}
 	log := io.Discard
 	if *verbose {
 		log = os.Stderr
 	}
 	rs, err := a.runEval(ctx, tasks, names, *n, *timeout, os.Stdout, log)
 	if len(rs) > 0 {
-		p, werr := saveEval(EvalFile{Date: time.Now().Format(time.RFC3339), Version: version, Commit: buildCommit(), Model: filepath.Base(llm.Model), Explore: a.exploreOn(), Results: rs})
+		p, werr := saveEval(EvalFile{Date: time.Now().Format(time.RFC3339), Version: version, Commit: commit, Model: filepath.Base(llm.Model), Explore: a.exploreOn(), Results: rs})
 		if werr != nil {
 			return werr
 		}
