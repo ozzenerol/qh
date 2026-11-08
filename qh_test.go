@@ -757,3 +757,17 @@ func TestLibraryDigNudge(t *testing.T) {
 		t.Fatal("nudge came too early")
 	}
 }
+
+func TestPatternHint(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.kt"), []byte("every { any() }\n"), 0o644)
+	tl := &Tools{Cwd: dir}
+	out, ok := tl.Run(context.Background(), "bash", `{"command":"grep -E 'any(' a.kt"}`)
+	if ok || !strings.Contains(out, "grep -F") {
+		t.Fatalf("bash hint: %s", out)
+	}
+	tl.ReadOnly = true
+	if out, _ := tl.Run(context.Background(), "grep", `{"pattern":"any("}`); !strings.Contains(out, "grep -F") {
+		t.Fatalf("grep tool hint: %s", out)
+	}
+}

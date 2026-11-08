@@ -230,6 +230,9 @@ func (t *Tools) grep(ctx context.Context, pat, p, glob string) (string, bool) {
 	if prefix := t.Cwd + "/"; strings.Contains(res, prefix) {
 		res = strings.ReplaceAll(res, prefix, "")
 	}
+	if err != nil && badPattern.MatchString(res) {
+		res = strings.TrimRight(res, "\n") + "\n" + patternHint
+	}
 	return clip(res), err == nil
 }
 
@@ -632,6 +635,9 @@ func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration)
 	if code == 1 && strings.TrimSpace(out.String()) == "" && searchCmd.MatchString(command) {
 		return "no matches [exit 1]", true
 	}
+	if code != 0 && badPattern.MatchString(out.String()) {
+		res = strings.TrimRight(res, "\n") + "\n" + patternHint
+	}
 	if errs := compilerErrors(out.String(), t.Cwd); len(errs) > 0 && (code != 0 || testCmd.MatchString(command)) {
 		res = strings.TrimRight(res, "\n") + "\n\n[qh: compiler errors]\n" + strings.Join(errs, "\n")
 	}
@@ -681,6 +687,12 @@ func compilerErrors(out, cwd string) []string {
 	}
 	return errs
 }
+
+// badPattern matches the errors grep and rg give for a broken regular
+// expression, which is usually a literal search with ( [ { or * in it.
+var badPattern = regexp.MustCompile(`(?i)parentheses not balanced|brackets \(\[ \]\) not balanced|unmatched [(\[{]|invalid (regular expression|preceding regular expression|content of)|regex parse error|trailing backslash|invalid range end`)
+
+const patternHint = "[qh: the pattern is a regular expression and ( [ { * . have meanings there. For a literal search use grep -F (or rg -F), or escape them.]"
 
 var searchCmd = regexp.MustCompile(`(^|[|;&]\s*|\s)(grep|egrep|fgrep|rg|ag|ack)\s`)
 
