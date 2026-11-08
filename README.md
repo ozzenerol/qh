@@ -58,6 +58,7 @@ qh wait -s lexer  # block until the run on lexer ends, then print its report
 qh sessions
 qh reset -s lexer
 qh undo -s lexer  # put back the files the last run on lexer changed
+qh diff -s lexer  # what the last run on lexer changed, as a unified diff
 qh stop
 ```
 
@@ -68,6 +69,27 @@ The chat shows every run on its session, from any client. The session name `@cha
 In the chat, Enter sends and Ctrl+J starts a new line (pasted text keeps its lines). Up and Down walk the history, Ctrl+T shows the thinking, and Ctrl+C twice quits. Type `/` for the command menu (`/new`, `/resume`, `/think on|off`, `/sessions`, `/clear`, `/exit`); ↑↓ picks one, Tab completes, Enter runs it. Without a terminal (a pipe, or `TERM=dumb`) qh uses a plain line chat.
 
 Sessions are saved in `~/.qh/sessions/NAME.json` after each step, so they survive a daemon restart. `qh sessions` lists them with the number of turns, the context size, and `RUNNING step N` for a run in progress (`WAITING for the model` while another session's run has the model), and who started it (`from opus`, `from qh run`, `from a terminal chat`). A chat started with plain `qh` gets a new session named after the time (`1108-013105`); `qh run` uses `main` unless you give `-s`.
+
+## Report facts
+
+A normal run's report ends with lines that qh writes itself, from what it saw (at most 10 files are listed):
+
+```
+qh facts: the run changed 3 files:
+  modified src/A.kt (+1 -1)
+  created src/B.kt (+40 -0)
+  modified src/F.kt (+4 -4) whitespace only
+qh facts: last test run qh saw: 34 passed, 1 failed, 0 skipped
+qh facts: stopped the background commands still running at the end: bg1 (./gradlew bootRun)
+qh note: the report lists Other.kt as changed, but this run did not change it
+qh note: the run created src/B.kt, and the report does not mention it
+qh note: the report says "35 tests passed", but no test run qh saw had 35 tests
+qh note: the report says "all tests pass", but the last test run qh saw had 1 failed
+```
+
+The files come from the undo checkpoint, so they include changes made by bash in a git repo. The test counts are the `[qh: tests: ...]` lines from JUnit XML reports (Gradle, Maven); runs with no such reports get no test facts and no test notes. The claim check is literal: file names are the base names on the report's "files changed" (or created, modified) lines and the list items under them; a changed file counts as mentioned when its base name is anywhere in the report, and test files and whitespace-only changes are not asked for. A test number in the report ("35 tests passed", "12 passed") is fine when it matches the passed count, the total or a per-class count of any test run in the run. On the final reports of 34 stored Mac sessions it gave 3 test-number notes, two of them for numbers qh has no facts for (one class's passes inside a failing class, "the 3 passing tests") and one for a sentence about what 44 would mean.
+
+`qh diff -s NAME` prints the unified diff of the newest run's files against how they are now, read from the checkpoint, so it works in a repo with other uncommitted work. When the last run changed nothing it says so.
 
 ## Undo
 

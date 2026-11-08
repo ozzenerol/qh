@@ -155,3 +155,75 @@ func rebase(args, root, cwd string) string {
 	b, _ := json.Marshal(a)
 	return string(b)
 }
+
+// TestReplayReports runs the claim check on the final report of the last
+// run of each stored session (QH_REPLAY), with the facts taken from that
+// run's successful writes and edits and its test count lines. It prints the
+// notes; it fails on nothing.
+func TestReplayReports(t *testing.T) {
+	src := os.Getenv("QH_REPLAY")
+	if src == "" {
+		t.Skip("set QH_REPLAY to a folder of session files")
+	}
+	files, _ := filepath.Glob(filepath.Join(src, "*.json"))
+	sort.Strings(files)
+	sumRe := regexp.MustCompile(`\[qh: tests: ([^\]]+)\]`)
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		var s Session
+		if json.Unmarshal(b, &s) != nil {
+			continue
+		}
+		start := 0
+		for i, m := range s.Msgs {
+			if m.Role == "user" && m.From != "qh" && m.From != "compact" {
+				start = i
+			}
+		}
+		run := s.Msgs[start:]
+		report := ""
+		for i := len(run) - 1; i >= 0; i-- {
+			if run[i].Role == "assistant" && len(run[i].ToolCalls) == 0 && len(run[i].Content) > 100 {
+				report = run[i].Content
+				break
+			}
+		}
+		if report == "" {
+			continue
+		}
+		calls := map[string]ToolCall{}
+		changed := map[string]bool{}
+		tl := &Tools{}
+		for _, m := range run {
+			for _, tc := range m.ToolCalls {
+				calls[tc.ID] = tc
+			}
+			if m.Role != "tool" {
+				continue
+			}
+			tc := calls[m.ToolCallID]
+			if (tc.Function.Name == "write" || tc.Function.Name == "edit") && !strings.HasPrefix(m.Content, "error:") {
+				var a struct{ Path string }
+				json.Unmarshal([]byte(tc.Function.Arguments), &a)
+				if a.Path != "" {
+					changed[a.Path] = true
+				}
+			}
+			for _, x := range sumRe.FindAllStringSubmatch(m.Content, -1) {
+				tl.noteTests(x[1])
+			}
+		}
+		var ff []fileFact
+		for p := range changed {
+			rel := strings.TrimPrefix(p, s.Cwd+"/")
+			ff = append(ff, fileFact{rel: rel, kind: "modified", add: 1})
+		}
+		notes := facts(report, ff, tl.Tests, nil, true)
+		fmt.Printf("== %s: %d changed, claimed %v\n", filepath.Base(f), len(changed), claimedFiles(report))
+		for _, n := range notes {
+			if strings.HasPrefix(n, "qh note") {
+				fmt.Println("   " + n)
+			}
+		}
+	}
+}

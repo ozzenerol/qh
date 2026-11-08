@@ -396,6 +396,9 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 	if len(st.Todo) > 0 {
 		final = strings.TrimSpace(final) + "\n\nqh: todo items not done: " + strings.Join(st.Todo, "; ")
 	}
+	if len(st.Facts) > 0 {
+		final = strings.TrimSpace(final) + "\n\n" + strings.Join(st.Facts, "\n")
+	}
 	all(Event{T: "done", From: req.From, Text: strings.TrimSpace(final), Stats: &st})
 }
 

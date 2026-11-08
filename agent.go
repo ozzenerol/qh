@@ -130,6 +130,7 @@ type Stats struct {
 	Limit        bool           `json:"step_limit,omitempty"`    // the run stopped at max_steps
 	Checks       []string       `json:"checks,omitempty"`        // results of the "Done when" commands
 	Todo         []string       `json:"todo_open,omitempty"`     // todo items not done at the end
+	Facts        []string       `json:"facts,omitempty"`         // what qh saw the run do, and where the report differs
 	ThinkDropped int            `json:"think_dropped,omitempty"` // tokens of earlier turns' thinking removed at the start
 	Ctx          map[string]int `json:"ctx_by_tool,omitempty"`   // tokens (chars/4) of tool results in the context at the end, per tool
 }
@@ -705,10 +706,16 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		for _, c := range skippedChecks {
 			st.Checks = append(st.Checks, "qh check skipped (not a command qh runs): "+c)
 		}
-		if stopped := tools.BG.Close(); len(stopped) > 0 {
-			st.Checks = append(st.Checks, "qh stopped the background commands still running at the end: "+strings.Join(stopped, ", "))
+		stopped := tools.BG.Close()
+		if len(stopped) > 0 {
 			emit(Event{T: "info", Text: "stopped background commands: " + strings.Join(stopped, ", ")})
 		}
+		tools.Undo.finish()
+		report := ""
+		if n := len(s.Msgs); n > 0 && s.Msgs[n-1].Role == "assistant" {
+			report = s.Msgs[n-1].Content
+		}
+		st.Facts = facts(report, tools.Undo.changes(), tools.Tests, stopped, tools.Undo != nil)
 	}
 	st.Todo = todoOpen(s.Todo)
 	st.Ctx = ctxByTool(s.Msgs)

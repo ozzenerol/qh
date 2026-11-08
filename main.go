@@ -34,6 +34,7 @@ usage:
   qh reset [-s session]        clear a session
   qh eval [-only a,b] [-n N]   run the benchmark tasks with this build; -compare A.json B.json, -list
   qh undo [-s session] [-list] [-force]  restore the files the last run changed
+  qh diff [-s session]         show what the last run changed, as a unified diff
   qh serve                     run the daemon in the foreground
   qh stop                      stop the daemon
   qh status                    show if the daemon runs
@@ -91,6 +92,8 @@ func main() {
 		err = simple(ClientReq{Op: "reset", Session: *name})
 	case "undo":
 		err = undoCmd(args)
+	case "diff":
+		err = diffCmd(args)
 	case "stop":
 		if c, e := net.DialTimeout("unix", sockPath(), time.Second); e == nil {
 			c.Close()

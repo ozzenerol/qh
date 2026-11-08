@@ -116,13 +116,17 @@ func (cp *Checkpoint) save() {
 
 // finish notes the state of every touched file and drops old runs.
 func (cp *Checkpoint) finish() {
-	if cp == nil {
+	if cp == nil || cp.Finished {
 		return
+	}
+	if os.MkdirAll(cp.root, 0o700) == nil {
+		os.WriteFile(filepath.Join(cp.root, lastRunFile), []byte(cp.ID+"\n"), 0o600)
 	}
 	for _, s := range cp.bgSnaps {
 		cp.bashAfter(s) // the background commands have stopped by now
 	}
 	if cp.dir == "" {
+		cp.Finished = true
 		return
 	}
 	for i := range cp.Files {

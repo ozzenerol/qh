@@ -74,6 +74,7 @@ type Tools struct {
 	Undo        *Checkpoint          // the files this run changed, for qh undo; nil keeps nothing
 	Changed     map[string]bool      // files that write and edit changed, whatever the argument names were
 	LastPath    string               // the file of the last successful write or edit
+	Tests       []testCount          // the test counts qh added to bash results, in order
 }
 
 func (t *Tools) wrote(fp string) {
@@ -808,6 +809,7 @@ func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration)
 			res = strings.TrimRight(res, "\n") + "\n\n[qh: failing tests from the JUnit XML reports]\n" + f
 		}
 		if sum != "" {
+			t.noteTests(sum)
 			res = strings.TrimRight(res, "\n") + "\n[qh: tests: " + sum + "]"
 		}
 	}

@@ -146,8 +146,8 @@ func TestBGEndOfRun(t *testing.T) {
 			syscall.Kill(-pid, syscall.SIGKILL)
 			t.Fatalf("cancel=%v: background group %d left running", cancelIt, pid)
 		}
-		if !cancelIt && (len(st.Checks) != 1 || !strings.Contains(st.Checks[0], "qh stopped the background commands still running at the end: bg1 (sleep 60 & echo up; sleep 60)")) {
-			t.Fatalf("checks %q", st.Checks)
+		if !cancelIt && !strings.Contains(strings.Join(st.Facts, "\n"), "qh facts: stopped the background commands still running at the end: bg1 (sleep 60 & echo up; sleep 60)") {
+			t.Fatalf("facts %q", st.Facts)
 		}
 	}
 }
