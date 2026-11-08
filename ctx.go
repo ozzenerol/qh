@@ -68,7 +68,7 @@ type readMark struct {
 	asked  bool // the last answer for this key was "unchanged"
 }
 
-func fileHash(b []byte) uint64 {
+func contentHash(b []byte) uint64 {
 	h := fnv.New64a()
 	h.Write(b)
 	return h.Sum64()
@@ -140,7 +140,7 @@ func (s *Session) reread(t *Tools, name, raw string, step int) string {
 		return ""
 	}
 	b, err := os.ReadFile(fp)
-	if err != nil || fileHash(b) != m.hash {
+	if err != nil || contentHash(b) != m.hash {
 		return ""
 	}
 	if m.asked {
@@ -177,7 +177,7 @@ func (s *Session) sawRead(t *Tools, raw, callID, out string, step int) {
 	if len(b) > 0 && b[len(b)-1] != '\n' {
 		n++
 	}
-	m := &readMark{callID: callID, run: s.runs, step: step, lines: n, hash: fileHash(b), size: int64(len(b))}
+	m := &readMark{callID: callID, run: s.runs, step: step, lines: n, hash: contentHash(b), size: int64(len(b))}
 	m.whole = !ranged && !wholeRe.MatchString(out)
 	s.reads[key] = m
 	if m.whole {
