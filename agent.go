@@ -127,6 +127,7 @@ type Stats struct {
 	Retries      int            `json:"retries"`
 	Window       int            `json:"window"`
 	ToolErrs     int            `json:"tool_errors"`
+	CmdFails     int            `json:"failed_commands"`       // commands that ran and exited non-zero (failing builds and tests); not in ToolErrs
 	Limit        bool           `json:"step_limit,omitempty"`  // the run stopped at max_steps
 	Checks       []string       `json:"checks,omitempty"`      // results of the "Done when" commands
 	Todo         []string       `json:"todo_open,omitempty"`   // todo items not done at the end
@@ -639,7 +640,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			if n := seen[key]; n >= 3 {
 				out = fmt.Sprintf("[you made this exact call %d times; the result will not change. Try a different step.]\n", n) + out
 			}
-			if !ok {
+			if !ok && failKind(tc.Function.Name, out) == "failed" {
+				st.CmdFails++
+			} else if !ok {
 				st.ToolErrs++
 			} else if tc.Function.Name == "write" || tc.Function.Name == "edit" {
 				var pa struct{ Path, File_path string }

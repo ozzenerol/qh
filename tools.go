@@ -166,6 +166,10 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 			return e, false
 		}
 		p, _ := s("path")
+		if fi, err := os.Stat(t.path(p)); err == nil && fi.IsDir() {
+			out, ok := t.ls(t.path(p))
+			return "note: " + p + " is a folder, so qh listed it; read takes a file.\n" + out, ok
+		}
 		lim := n("limit", readDefault)
 		if args["offset"] == nil && args["limit"] == nil {
 			lim = readAuto
@@ -206,7 +210,7 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 	case "edit":
 		// Names other agents use for the same fields.
 		for alias, k := range map[string]string{"old_string": "old", "new_string": "new", "old_text": "old", "new_text": "new",
-			"oldText": "old", "newText": "new", "search": "old", "replace": "new", "file_path": "path", "file": "path"} {
+			"oldText": "old", "newText": "new", "search": "old", "replace": "new", "file_path": "path", "file": "path", "offset": "line", "line_number": "line"} {
 			if _, ok := args[k]; !ok && args[alias] != nil {
 				args[k] = args[alias]
 			}
@@ -422,6 +426,18 @@ func (t *Tools) edit(fp, shown, old, nw string, all bool, near int) (string, boo
 			old, cnt = fixed, strings.Count(src, fixed)
 		}
 	}
+	fix := ""
+	if cnt == 0 {
+		if m, n2, note, ok := indentFind(src, old, nw); ok {
+			old, nw, cnt, fix = m, n2, 1, note
+		}
+	}
+	if cnt > 1 && !all && near <= 0 {
+		if at, ok := wholeLine(src, old); ok {
+			near = strings.Count(src[:at], "\n") + 1
+			fix = fmt.Sprintf("note: old is in %d places, but only the one at line %d is whole lines; qh changed that one.\n", cnt, near)
+		}
+	}
 	switch {
 	case cnt == 0:
 		return "error: old text not found in " + shown + ". " + nearest(src, old), false
@@ -456,7 +472,7 @@ func (t *Tools) edit(fp, shown, old, nw string, all bool, near int) (string, boo
 		return "error: " + err.Error(), false
 	}
 	t.saw(fp, src)
-	return fmt.Sprintf("edited %s at line %d (%d replacement(s))", shown, line, max(1, cnt*boolInt(all))), true
+	return fix + fmt.Sprintf("edited %s at line %d (%d replacement(s))", shown, line, max(1, cnt*boolInt(all))), true
 }
 
 func boolInt(b bool) int {

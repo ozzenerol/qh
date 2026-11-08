@@ -278,8 +278,8 @@ func statLine(st *Stats) string {
 	if st.Secs > 0 {
 		tps = float64(st.Output) / st.Secs
 	}
-	line := fmt.Sprintf("%s: %d steps, %d tool errors, %d tokens out, %.0fs (%.1f tok/s overall), context %d tokens",
-		st.Model, st.Steps, st.ToolErrs, st.Output, st.Secs, tps, st.Prompt)
+	line := fmt.Sprintf("%s: %d steps, %d tool errors, %d failed commands, %d tokens out, %.0fs (%.1f tok/s overall), context %d tokens",
+		st.Model, st.Steps, st.ToolErrs, st.CmdFails, st.Output, st.Secs, tps, st.Prompt)
 	if st.Prompt > 40000 {
 		if top := ctxTop(st.Ctx, st.Prompt); top != "" {
 			line += " (ctx: " + top + ")"
