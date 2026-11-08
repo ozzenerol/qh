@@ -933,3 +933,16 @@ func TestSourceRoots(t *testing.T) {
 		}
 	}
 }
+
+func TestNegativeRules(t *testing.T) {
+	p := "Add the job.\n\n1. Use concrete instants in verify, not any().\n2. Write 4 tests.\n- Do not touch git.\nNever log the token."
+	got := negativeRules(p)
+	for _, w := range []string{"not any()", "Do not touch git", "Never log the token"} {
+		if !strings.Contains(got, w) {
+			t.Fatalf("missing %q in %q", w, got)
+		}
+	}
+	if strings.Contains(got, "Write 4 tests") || negativeRules("Add a test.") != "" {
+		t.Fatalf("too much: %q", got)
+	}
+}

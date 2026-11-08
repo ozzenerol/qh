@@ -171,6 +171,31 @@ func (a *Agent) chat(ctx context.Context, r Request, onDelta func(Delta) bool, e
 
 const selfCheckAsk = `Before you report, read the task again, mainly its "Done when" part and every numbered or bulleted requirement. For each one, say done or not done. For each numeric rule in the task (a range, a minimum or maximum, a limit, a default), name the file and line that enforces it, and check what happens at and past the edge. For each test you wrote, name the line of production code that would have to be wrong for it to fail; a test that cannot fail is not done. Fix every item that is not done. Then give the final report.`
 
+var negRe = regexp.MustCompile(`(?i)\b(do not|don't|dont|never|must not|mustn't|should not|shouldn't|avoid|not\s+\S+|instead of|no more than|without)\b`)
+
+// negativeRules quotes the lines of the task that say what not to do. The
+// model slips on these more than on positive steps, so the self-check names
+// them one by one.
+func negativeRules(prompt string) string {
+	var rules []string
+	seen := map[string]bool{}
+	for _, l := range strings.Split(prompt, "\n") {
+		t := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l), "-*0123456789.) "))
+		if len(t) < 8 || !negRe.MatchString(t) || seen[t] {
+			continue
+		}
+		seen[t] = true
+		rules = append(rules, "- "+oneLine(t, 300))
+		if len(rules) == 20 {
+			break
+		}
+	}
+	if len(rules) == 0 {
+		return ""
+	}
+	return "\n\nThese lines of the task say what not to do. For each one, say whether your code keeps it, and quote the code if you are not sure:\n" + strings.Join(rules, "\n")
+}
+
 // doneWhen returns the "Done when" part of a task, or "".
 func doneWhen(prompt string) string {
 	lines := strings.Split(prompt, "\n")
@@ -450,7 +475,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			if !selfChecked {
 				selfChecked = true
 				emit(Event{T: "info", Text: "self-check: asking the model to compare its work with the task"})
-				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk, From: "qh"})
+				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk + negativeRules(prompt), From: "qh"})
 				limit = max(limit, st.Steps+passGrace)
 				continue
 			}
