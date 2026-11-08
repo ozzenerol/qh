@@ -580,9 +580,11 @@ func onOff(b bool) string {
 // checkVerdict is one line for the top of the report, so a reader sees what
 // qh measured before what the model claims.
 func checkVerdict(lines []string) string {
-	pass, fail, skip := 0, 0, 0
+	pass, fail, skip, info := 0, 0, 0, 0
 	for _, l := range lines {
 		switch {
+		case strings.HasPrefix(l, "qh check info"):
+			info++
 		case strings.HasPrefix(l, "qh check skipped"):
 			skip++
 		case strings.HasPrefix(l, "qh check passed"):
@@ -594,6 +596,9 @@ func checkVerdict(lines []string) string {
 	sk := ""
 	if skip > 0 {
 		sk = fmt.Sprintf("; %d not run, check them yourself", skip)
+	}
+	if info > 0 {
+		sk += fmt.Sprintf("; %d only print state, read their output", info)
 	}
 	switch {
 	case pass+fail == 0:

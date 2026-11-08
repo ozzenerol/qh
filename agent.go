@@ -705,7 +705,7 @@ func (a *Agent) finalChecks(ctx context.Context, tools *Tools, prompt string, cm
 	}
 	failed := ""
 	if len(cmds) > 0 {
-		failed = a.runChecks(ctx, tools, cmds, wantClean, st, emit)
+		failed = a.runChecks(ctx, tools, cmds, checkExpects(prompt), wantClean, st, emit)
 	}
 	var notes []string
 	files := make([]string, 0, len(changed))
@@ -1103,11 +1103,89 @@ func unusedImports(path, src string) []string {
 	return out
 }
 
+// expect is what the task says a check command must print.
+type expect struct {
+	empty bool   // "prints nothing", "is empty"
+	none  string // "shows no .bak file": no line may contain this
+}
+
+var (
+	expEmpty = regexp.MustCompile(`(?i)^\s*(?:\)\s*)?(?:shows|prints|lists|outputs|returns|gives|is|are)\s+(?:nothing|empty|no output|no lines)`)
+	expNone  = regexp.MustCompile("(?i)^\\s*(?:\\)\\s*)?(?:shows|prints|lists|outputs|returns|gives|has)\\s+no\\s+`?([^\\s`,;]+)")
+)
+
+// checkExpects reads, for each backticked command of the "Done when" part,
+// the words after it that say what it must print.
+func checkExpects(prompt string) map[string]expect {
+	out := map[string]expect{}
+	part := doneWhen(prompt)
+	for {
+		a := strings.Index(part, "`")
+		if a < 0 {
+			break
+		}
+		b := strings.Index(part[a+1:], "`")
+		if b < 0 {
+			break
+		}
+		cmd := strings.TrimSpace(part[a+1 : a+1+b])
+		part = part[a+b+2:]
+		if expEmpty.MatchString(part) {
+			out[cmd] = expect{empty: true}
+		} else if m := expNone.FindStringSubmatch(part); m != nil {
+			out[cmd] = expect{none: strings.TrimRight(m[1], ".")}
+		}
+	}
+	return out
+}
+
+// miss says why the output breaks the expectation, or "".
+func (e expect) miss(out string) string {
+	lines := outLines(out, 1000)
+	switch {
+	case e.empty && len(lines) > 0:
+		return "the task says this prints nothing, but it printed: " + lines[0]
+	case e.none != "":
+		for _, l := range lines {
+			if strings.Contains(l, e.none) {
+				return fmt.Sprintf("the task says this shows no %s, but it printed: %s", e.none, l)
+			}
+		}
+	}
+	return ""
+}
+
+// outLines is the command output without qh's own lines and the exit line.
+func outLines(out string, max int) []string {
+	var ls []string
+	for _, l := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(l)
+		if t == "" || strings.HasPrefix(t, "[exit ") || strings.HasPrefix(t, "[qh:") || t == "no matches [exit 1]" {
+			continue
+		}
+		if len(ls) < max {
+			ls = append(ls, oneLine(t, 200))
+		}
+	}
+	return ls
+}
+
+var printOnlyRe = regexp.MustCompile(`^(git (status|log|show|branch)|ls|cat|echo|find|wc|head|tail|tree|pwd)\b`)
+
+// printOnly is true for commands that exit 0 whatever they print, so their
+// exit code is no check.
+func printOnly(c string) bool {
+	if printOnlyRe.MatchString(c) && !strings.ContainsAny(c, "|&;") {
+		return true
+	}
+	return strings.HasPrefix(c, "git diff") && !strings.Contains(c, "--exit-code") && !strings.Contains(c, "--quiet") && !strings.ContainsAny(c, "|&;")
+}
+
 var testsLine = regexp.MustCompile(`\[qh: tests: ([^\]\n]+)\]`)
 
 // runChecks runs the "Done when" commands and keeps one line per command in
 // st.Checks. When one fails, it returns a message for the model; else "".
-func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, wantClean bool, st *Stats, emit func(Event)) string {
+func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, exps map[string]expect, wantClean bool, st *Stats, emit func(Event)) string {
 	st.Checks = nil
 	var fails, warns []string
 	for _, c := range cmds {
@@ -1118,7 +1196,18 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, want
 		if !ok {
 			summary = failLine(out)
 		}
+		exp := exps[c]
+		if ok {
+			if why := exp.miss(out); why != "" {
+				ok, summary = false, why
+				out = why + "\n\n" + out
+			}
+		}
 		emit(Event{T: "result", Tool: "check", OK: ok, Text: summary})
+		if ok && exp == (expect{}) && printOnly(c) {
+			st.Checks = append(st.Checks, "qh check info (its exit code proves nothing, read the output): "+c+"\n    "+strings.Join(outLines(out, 5), "\n    "))
+			continue
+		}
 		if ok {
 			w := warningLines(out, a.Cfg.WarnIgnore)
 			if wantClean && len(w) > 0 {

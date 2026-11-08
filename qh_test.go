@@ -1020,3 +1020,23 @@ func TestStrayFiles(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestCheckExpects(t *testing.T) {
+	p := "Do it.\n\nDone when: `./gradlew test` passes, `git status --short` shows no `.bak` file, `git diff --name-only src/x` prints nothing, and `ls build`."
+	e := checkExpects(p)
+	if e["git status --short"].none != ".bak" || !e["git diff --name-only src/x"].empty || e["ls build"] != (expect{}) || e["./gradlew test"] != (expect{}) {
+		t.Fatalf("got %+v", e)
+	}
+	if e["git status --short"].miss(" M a.kt\n?? a.kt.bak\n[exit 0]") == "" || e["git status --short"].miss(" M a.kt\n[exit 0]") != "" {
+		t.Fatal("none")
+	}
+	if e["git diff --name-only src/x"].miss("[exit 0]") != "" || e["git diff --name-only src/x"].miss("src/x/A.kt\n[exit 0]") == "" {
+		t.Fatal("empty")
+	}
+	if !printOnly("git status --short") || printOnly("git diff --exit-code") || printOnly("./gradlew test") || printOnly("ls | grep -q x") {
+		t.Fatal("printOnly")
+	}
+	if v := checkVerdict([]string{"qh check passed: a", "qh check info (x): ls"}); !strings.Contains(v, "1 only print state") {
+		t.Fatal(v)
+	}
+}
