@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -34,6 +35,12 @@ func helpLines() []string {
 	for _, kv := range [][2]string{
 		{"enter", "send"},
 		{"ctrl+j", "new line (pasted text keeps its lines)"},
+		{"ctrl+w alt+⌫", "delete the word before the cursor (ctrl+⌫ too)"},
+		{"alt+d", "delete the word after the cursor (ctrl+del too)"},
+		{"ctrl+u ctrl+k", "delete to the start / end of the line"},
+		{"ctrl+y", "paste what the last delete removed"},
+		{"alt+← alt+→", "move by word (ctrl+← → and alt+b alt+f too)"},
+		{"ctrl+a ctrl+e", "start / end of the line"},
 		{"esc", "stop the answer"},
 		{"↑ ↓", "history"},
 		{"/", "commands"},
@@ -94,6 +101,7 @@ type tui struct {
 	histPos  int
 	draft    []rune
 	ctrlC    time.Time
+	killed   []rune // the text the last kill removed, for Ctrl+Y
 	pasting  bool
 	pending  []byte
 	escTimer *time.Timer
@@ -745,7 +753,17 @@ func (t *tui) insertText(b []byte) {
 // sequence is not complete yet.
 func (t *tui) escape(p []byte) (int, uiAction) {
 	if p[1] != '[' && p[1] != 'O' {
-		return 2, actNone // Alt+key: ignore
+		switch p[1] { // Alt+key, as terminals send it with Option/Alt as Meta
+		case 0x7f, 0x08:
+			t.killBack(t.wordLeft(t.cur))
+		case 'b':
+			t.cur = t.wordLeft(t.cur)
+		case 'f':
+			t.cur = t.wordRight(t.cur)
+		case 'd':
+			t.killFwd(t.wordRight(t.cur))
+		}
+		return 2, actNone
 	}
 	j := 2
 	for j < len(p) && (p[j] < 0x40 || p[j] > 0x7e) {
@@ -793,6 +811,16 @@ func (t *tui) escape(p []byte) (int, uiAction) {
 		t.cur = min(len(t.buf), t.cur+1)
 	case "D":
 		t.cur = max(0, t.cur-1)
+	case "1;5C", "1;3C", "1;9C", "5C":
+		t.cur = t.wordRight(t.cur)
+	case "1;5D", "1;3D", "1;9D", "5D":
+		t.cur = t.wordLeft(t.cur)
+	case "3;5~", "3;3~":
+		t.killFwd(t.wordRight(t.cur))
+	case "1;5H", "1;3H":
+		t.cur = 0
+	case "1;5F", "1;3F":
+		t.cur = len(t.buf)
 	case "H", "1~":
 		t.cur, _ = t.lineBounds()
 	case "F", "4~":
@@ -805,6 +833,50 @@ func (t *tui) escape(p []byte) (int, uiAction) {
 		t.pasting = true
 	}
 	return j + 1, actNone
+}
+
+func isWord(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// wordLeft is the start of the word before i, skipping spaces and
+// punctuation first, like Alt+B in readline.
+func (t *tui) wordLeft(i int) int {
+	for i > 0 && !isWord(t.buf[i-1]) {
+		i--
+	}
+	for i > 0 && isWord(t.buf[i-1]) {
+		i--
+	}
+	return i
+}
+
+// wordRight is the end of the word after i.
+func (t *tui) wordRight(i int) int {
+	for i < len(t.buf) && !isWord(t.buf[i]) {
+		i++
+	}
+	for i < len(t.buf) && isWord(t.buf[i]) {
+		i++
+	}
+	return i
+}
+
+// killBack deletes from s to the cursor and keeps it for Ctrl+Y.
+func (t *tui) killBack(s int) {
+	if s >= t.cur {
+		return
+	}
+	t.killed = append([]rune(nil), t.buf[s:t.cur]...)
+	t.buf = append(t.buf[:s], t.buf[t.cur:]...)
+	t.cur = s
+}
+
+// killFwd deletes from the cursor to e and keeps it for Ctrl+Y.
+func (t *tui) killFwd(e int) {
+	if e <= t.cur {
+		return
+	}
+	t.killed = append([]rune(nil), t.buf[t.cur:e]...)
+	t.buf = append(t.buf[:t.cur], t.buf[e:]...)
 }
 
 func (t *tui) key(r rune) uiAction {
@@ -833,11 +905,19 @@ func (t *tui) key(r rune) uiAction {
 		return actSubmit
 	case '\n':
 		t.insert('\n')
-	case 0x7f, 0x08:
+	case 0x7f:
 		if t.cur > 0 {
 			t.buf = append(t.buf[:t.cur-1], t.buf[t.cur:]...)
 			t.cur--
 		}
+	case 0x08: // Ctrl+Backspace in most terminals
+		t.killBack(t.wordLeft(t.cur))
+	case 2:
+		t.cur = max(0, t.cur-1)
+	case 6:
+		t.cur = min(len(t.buf), t.cur+1)
+	case 0x19:
+		t.insert(t.killed...)
 	case 3:
 		if t.running {
 			return actCancel
@@ -864,11 +944,10 @@ func (t *tui) key(r rune) uiAction {
 		_, t.cur = t.lineBounds()
 	case 0x15:
 		s, _ := t.lineBounds()
-		t.buf = append(t.buf[:s], t.buf[t.cur:]...)
-		t.cur = s
+		t.killBack(s)
 	case 0x0b:
 		_, e := t.lineBounds()
-		t.buf = append(t.buf[:t.cur], t.buf[e:]...)
+		t.killFwd(e)
 	case 0x17:
 		s := t.cur
 		for s > 0 && t.buf[s-1] == ' ' {
@@ -877,8 +956,7 @@ func (t *tui) key(r rune) uiAction {
 		for s > 0 && t.buf[s-1] != ' ' && t.buf[s-1] != '\n' {
 			s--
 		}
-		t.buf = append(t.buf[:s], t.buf[t.cur:]...)
-		t.cur = s
+		t.killBack(s)
 	case 0x0c:
 		t.clearLive()
 		t.w("\x1b[2J\x1b[H")

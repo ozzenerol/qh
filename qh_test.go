@@ -1214,3 +1214,27 @@ func TestStatLineTiming(t *testing.T) {
 		t.Fatal(l)
 	}
 }
+
+func TestLineEditKeys(t *testing.T) {
+	type tc struct {
+		name, keys, want string
+		cur              int
+	}
+	for _, c := range []tc{
+		{"alt+backspace", "hello big-world\x1b\x7f", "hello big-", 10},
+		{"ctrl+backspace", "hello world\x08", "hello ", 6},
+		{"ctrl+w", "hello big-world\x17", "hello ", 6},
+		{"ctrl+left then alt+d", "one two three\x1b[1;5D\x1b[1;5D\x1bd", "one  three", 4},
+		{"alt+b alt+f", "one two\x1bb\x1bb\x1bfX", "oneX two", 4},
+		{"ctrl+u then ctrl+y", "abc def\x15xy\x19", "xyabc def", 9},
+		{"ctrl+k", "abc def\x01\x1bf\x0b", "abc", 3},
+		{"ctrl+delete", "abc def\x01\x1b[3;5~", " def", 0},
+		{"plain backspace", "abc\x7f", "ab", 2},
+	} {
+		u := &tui{}
+		u.feed([]byte(c.keys))
+		if string(u.buf) != c.want || u.cur != c.cur {
+			t.Errorf("%s: got %q cur %d, want %q cur %d", c.name, string(u.buf), u.cur, c.want, c.cur)
+		}
+	}
+}
