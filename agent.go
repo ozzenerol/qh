@@ -269,6 +269,8 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	selfChecked := doneWhen(prompt) == ""
 	checks := checkCommands(prompt)
 	checked := s.ReadOnly || len(checks) == 0
+	fixTurn := false // the model got one turn to fix failed checks
+	wantClean := noWarnings.MatchString(prompt)
 	defer s.setState(false, 0)
 
 	for st.Steps < a.Cfg.MaxSteps {
@@ -338,12 +340,15 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				continue
 			}
 			if !checked {
-				checked = true
-				if failed := a.runChecks(ctx, tools, checks, &st, emit); failed != "" {
+				// The checks run after the report, and once more after a fix
+				// turn, so the check lines describe the code as it ends.
+				failed := a.runChecks(ctx, tools, checks, wantClean, &st, emit)
+				if failed != "" && !fixTurn {
+					fixTurn = true
 					s.Msgs = append(s.Msgs, Message{Role: "user", From: "qh", Content: failed})
-					st.Checks = nil
 					continue
 				}
+				checked = true
 			}
 			ended = true
 			break
@@ -391,7 +396,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		emit(Event{T: "info", Text: fmt.Sprintf("stopped at the step limit (%d); asking for the report", a.Cfg.MaxSteps)})
 		a.limitReport(ctx, s, system, schemas, emit, &told)
 		if !checked {
-			a.runChecks(ctx, tools, checks, &st, emit)
+			a.runChecks(ctx, tools, checks, wantClean, &st, emit)
 		}
 	}
 	st.Secs = time.Since(t0).Seconds()
@@ -457,9 +462,9 @@ func firstLine(s string) string {
 
 // runChecks runs the "Done when" commands and keeps one line per command in
 // st.Checks. When one fails, it returns a message for the model; else "".
-func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, st *Stats, emit func(Event)) string {
+func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, wantClean bool, st *Stats, emit func(Event)) string {
 	st.Checks = nil
-	var fails []string
+	var fails, warns []string
 	for _, c := range cmds {
 		emit(Event{T: "tool", Tool: "check", Text: c})
 		args, _ := json.Marshal(map[string]any{"command": c, "timeout": 900})
@@ -470,7 +475,13 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, st *
 		}
 		emit(Event{T: "result", Tool: "check", OK: ok, Text: summary})
 		if ok {
-			st.Checks = append(st.Checks, "qh check passed: "+c)
+			w := warningLines(out)
+			if wantClean && len(w) > 0 {
+				st.Checks = append(st.Checks, fmt.Sprintf("qh check passed with %d warnings: %s", len(w), c))
+				warns = append(warns, w...)
+			} else {
+				st.Checks = append(st.Checks, "qh check passed: "+c)
+			}
 			continue
 		}
 		st.Checks = append(st.Checks, "qh check FAILED: "+c)
@@ -480,11 +491,38 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, st *
 		}
 		fails = append(fails, "`"+c+"`:\n"+tail)
 	}
-	if len(fails) == 0 {
+	if len(fails) == 0 && len(warns) == 0 {
 		return ""
+	}
+	if len(fails) == 0 {
+		if len(warns) > 30 {
+			warns = warns[:30]
+		}
+		return "qh ran the commands from the \"Done when\" part after your report. They passed, but the task asks for clean code and the compiler printed these warnings:\n\n" +
+			strings.Join(warns, "\n") + "\n\nFix them, run the command again, then give the final report."
 	}
 	return "qh ran the commands from the \"Done when\" part after your report, and these failed:\n\n" +
 		strings.Join(fails, "\n\n") + "\n\nFix the cause, run the command again, then give the final report."
+}
+
+// noWarnings matches a task that asks for code without warnings.
+var noWarnings = regexp.MustCompile(`(?i)unused|no warnings|without warnings|warning-free|zero warnings`)
+
+var warnLine = regexp.MustCompile(`(?i)^w: |\bwarning:|\[warning\]|is never used|unused import|declared and not used|imported and not used`)
+
+// warningLines returns the compiler warnings in out (Kotlin "w: ", javac,
+// gcc and clang "warning:", Maven "[WARNING]", Go "declared and not used").
+func warningLines(out string) []string {
+	var w []string
+	seen := map[string]bool{}
+	for _, l := range strings.Split(out, "\n") {
+		l = strings.TrimSpace(l)
+		if warnLine.MatchString(l) && !seen[l] && !strings.Contains(strings.ToLower(l), "deprecat") {
+			seen[l] = true
+			w = append(w, oneLine(l, 300))
+		}
+	}
+	return w
 }
 
 var errWords = regexp.MustCompile(`(?i)\berror\b|error:|\bfailed\b|failure|exception|panic|cannot|not found|denied|^e: `)

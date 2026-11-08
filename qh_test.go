@@ -527,11 +527,12 @@ func TestSelfCheckAndChecks(t *testing.T) {
 	a := &Agent{LLM: &LLM{BaseURL: srv.URL, Model: "m", HTTP: srv.Client()}, Cfg: Config{MaxSteps: 10, MaxTokens: 100, ThinkBudget: 30000}}
 	s := &Session{Name: "t", Cwd: dir}
 	st := a.Run(context.Background(), s, "Do it.\n\nDone when: `bash -c 'exit 1'` passes", "", func(Event) {})
-	// 1 answer, 2 self-check, 3 after the failed check; the check runs only once
+	// 1 answer, 2 self-check, 3 after the failed check; the check runs again
+	// after the fix turn and its line goes in the report
 	if n != 3 || !strings.Contains(asks[1], "Before you report") || !strings.Contains(asks[2], "these failed") {
 		t.Fatalf("n=%d asks=%q", n, asks)
 	}
-	if st.Checks != nil {
+	if len(st.Checks) != 1 || !strings.Contains(st.Checks[0], "FAILED") {
 		t.Fatalf("checks after the retry: %q", st.Checks)
 	}
 	if last := s.Msgs[len(s.Msgs)-1]; last.Content != "report 3" {
@@ -593,5 +594,15 @@ func TestStepLimit(t *testing.T) {
 	}
 	if m := s.Msgs[len(s.Msgs)-1]; m.Content != "partial report" || len(m.ToolCalls) != 0 {
 		t.Fatalf("report: %+v", m)
+	}
+}
+
+func TestWarningLines(t *testing.T) {
+	out := "> Task :compileKotlin\nw: file:///a/B.kt:3:8 Unused import directive\nw: file:///a/C.kt:9:5 Variable 'x' is never used\nw: file:///a/D.kt:1:1 'foo' is deprecated\nBUILD SUCCESSFUL"
+	if w := warningLines(out); len(w) != 2 {
+		t.Fatalf("warnings: %q", w)
+	}
+	if !noWarnings.MatchString("Done when: build passes with no unused imports") || noWarnings.MatchString("Done when: tests pass") {
+		t.Fatal("noWarnings")
 	}
 }
