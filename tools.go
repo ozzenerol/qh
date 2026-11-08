@@ -33,25 +33,28 @@ func toolSchemas(readOnly bool) []map[string]any {
 	num := func(d string) map[string]any { return map[string]any{"type": "integer", "description": d} }
 	read := fn("read", "Read a text file. Lines come back numbered. Use offset and limit for big files.",
 		map[string]any{"path": str("file path"), "offset": num("first line, 1-based"), "limit": num("number of lines")}, "path")
+	grep := fn("grep", "Search file contents. Returns file:line:text, at most 100 lines.",
+		map[string]any{"pattern": str("regular expression, or plain text with literal"), "path": str("file or directory, default ."),
+			"glob":    str("only files that match, for example *.go or src/**/*Test.kt"),
+			"literal": map[string]any{"type": "boolean", "description": "match the pattern as plain text"}}, "pattern")
 	if readOnly {
-		return []map[string]any{read,
-			fn("grep", "Search files for a regular expression (grep -E). Returns file:line:text.",
-				map[string]any{"pattern": str("regular expression"), "path": str("file or directory, default ."),
-					"glob": str("only files that match, for example *.go")}, "pattern"),
+		return []map[string]any{read, grep,
 			fn("ls", "List a directory. Directories end with /.",
 				map[string]any{"path": str("directory, default .")}),
 		}
 	}
-	return []map[string]any{
-		fn("read", "Read a text file. Lines come back numbered. Use offset and limit for big files.",
-			map[string]any{"path": str("file path"), "offset": num("first line, 1-based"), "limit": num("number of lines")}, "path"),
+	return []map[string]any{read,
 		fn("write", "Create or overwrite a file with the full content.",
 			map[string]any{"path": str("file path"), "content": str("full file content")}, "path", "content"),
 		fn("edit", "Replace one exact piece of text in a file. old must appear once in the file; copy it exactly, without line numbers.",
 			map[string]any{"path": str("file path"), "old": str("exact text to replace"), "new": str("replacement text"),
 				"all": map[string]any{"type": "boolean", "description": "replace every occurrence"}}, "path", "old", "new"),
-		fn("bash", "Run a shell command in the working directory. Use it for ls, grep, find, git, builds and tests.",
+		fn("bash", "Run a shell command in the working directory. Use it for git, builds and tests.",
 			map[string]any{"command": str("the command"), "timeout": num("seconds, default 120, max 900")}, "command"),
+		grep,
+		fn("glob", "Find files by path pattern, like src/**/*Test.kt. Returns at most 200 paths.",
+			map[string]any{"pattern": str("glob pattern; ** matches any directories"), "path": str("directory, default .")}, "pattern"),
+		todoSchema(),
 	}
 }
 
@@ -128,7 +131,7 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		if !ok || p == "" {
 			p = "."
 		}
-		return t.find(t.path(p), pat)
+		return t.glob(ctx, t.path(p), pat)
 	case "grep":
 		if e := need("pattern"); e != "" {
 			return e, false
@@ -139,7 +142,8 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 			p = "."
 		}
 		g, _ := s("glob")
-		return t.grep(ctx, pat, t.path(p), g)
+		lit := args["literal"] == true || args["literal"] == "true"
+		return t.grep(ctx, pat, t.path(p), g, lit)
 	case "ls":
 		p, ok := s("path")
 		if !ok || p == "" {
@@ -241,32 +245,7 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 	if t.ReadOnly {
 		return fmt.Sprintf("error: unknown tool %q; the tools are read, grep and ls", name), false
 	}
-	return fmt.Sprintf("error: unknown tool %q; the tools are read, write, edit, bash", name), false
-}
-
-func (t *Tools) grep(ctx context.Context, pat, p, glob string) (string, bool) {
-	args := []string{"-rnIE", "--exclude-dir=.git", "--exclude-dir=node_modules"}
-	if glob != "" {
-		args = append(args, "--include="+glob)
-	}
-	args = append(args, "-e", pat, p)
-	cmd := exec.CommandContext(ctx, "grep", args...)
-	cmd.Dir = t.Cwd
-	out, err := cmd.CombinedOutput()
-	if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
-		return "no matches", true
-	}
-	if err != nil && len(out) == 0 {
-		return "error: " + err.Error(), false
-	}
-	res := string(out)
-	if prefix := t.Cwd + "/"; strings.Contains(res, prefix) {
-		res = strings.ReplaceAll(res, prefix, "")
-	}
-	if err != nil && badPattern.MatchString(res) {
-		res = strings.TrimRight(res, "\n") + "\n" + patternHint
-	}
-	return clip(res), err == nil
+	return fmt.Sprintf("error: unknown tool %q; the tools are read, write, edit, bash, grep, glob, todo", name), false
 }
 
 func (t *Tools) ls(p string) (string, bool) {
@@ -535,45 +514,6 @@ func nearest(src, old string) string {
 	}
 	b.WriteString("Copy old from these lines, without the line numbers.")
 	return b.String()
-}
-
-// find lists the files under root whose name (or path, when the pattern has
-// a slash) matches a glob pattern. "**/" in the pattern is ignored.
-func (t *Tools) find(root, pat string) (string, bool) {
-	pat = strings.ReplaceAll(pat, "**/", "")
-	var out []string
-	n := 0
-	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "build" || d.Name() == "target" || d.Name() == ".gradle") {
-			return filepath.SkipDir
-		}
-		rel, _ := filepath.Rel(t.Cwd, p)
-		target := d.Name()
-		if strings.Contains(pat, "/") {
-			target = rel
-		}
-		if ok, _ := filepath.Match(pat, target); ok && rel != "." {
-			n++
-			if len(out) < 200 {
-				if d.IsDir() {
-					rel += "/"
-				}
-				out = append(out, rel)
-			}
-		}
-		return nil
-	})
-	if n == 0 {
-		return "no matches", true
-	}
-	res := strings.Join(out, "\n")
-	if n > len(out) {
-		res += fmt.Sprintf("\n... and %d more", n-len(out))
-	}
-	return res, true
 }
 
 // findByName lists up to 5 project files with the given base name.

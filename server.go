@@ -235,7 +235,7 @@ func (s *Server) handle(c net.Conn) {
 			emit(Event{T: "error", Text: "session " + req.Session + " is busy"})
 			return
 		}
-		ss.Msgs = nil
+		ss.Msgs, ss.Todo = nil, nil
 		if req.Cwd != "" {
 			ss.Cwd = req.Cwd
 		}
@@ -337,7 +337,7 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 	ss.setFrom(req.From)
 	defer ss.setFrom("")
 	if req.New {
-		ss.Msgs = nil
+		ss.Msgs, ss.Todo = nil, nil
 	}
 	if !req.Compact {
 		ss.Cwd = req.Cwd
@@ -371,6 +371,9 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 	}
 	if len(st.Checks) > 0 {
 		final = checkVerdict(st.Checks) + "\n\n" + strings.TrimSpace(final) + "\n\n" + strings.Join(st.Checks, "\n")
+	}
+	if len(st.Todo) > 0 {
+		final = strings.TrimSpace(final) + "\n\nqh: todo items not done: " + strings.Join(st.Todo, "; ")
 	}
 	all(Event{T: "done", From: req.From, Text: strings.TrimSpace(final), Stats: &st})
 }
