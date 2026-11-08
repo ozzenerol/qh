@@ -793,6 +793,21 @@ func (a *Agent) format(ctx context.Context, tools *Tools, changed map[string]boo
 		files = append(files, f)
 	}
 	sort.Strings(files)
+	var fixed []string
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		if out, n := fixColumnZero(f, string(b)); n > 0 && os.WriteFile(f, []byte(out), 0o644) == nil {
+			rel, _ := filepath.Rel(tools.Cwd, f)
+			fixed = append(fixed, fmt.Sprintf("%s (%d lines)", rel, n))
+		}
+	}
+	if len(fixed) > 0 {
+		emit(Event{T: "info", Text: "indented members written at column 0 in " + strings.Join(fixed, ", ")})
+		st.Checks = append(st.Checks, "qh indented members that were at column 0 inside a class: "+strings.Join(fixed, ", "))
+	}
 	if cfg.SortImports != nil && *cfg.SortImports {
 		var sorted []string
 		for _, f := range files {
@@ -840,6 +855,110 @@ func (a *Agent) format(ctx context.Context, tools *Tools, changed map[string]boo
 		}
 		st.Checks = append(st.Checks, fmt.Sprintf("qh format %s: %s on %d files", state, cfg.Format[e], len(byExt[e])))
 	}
+}
+
+var memberStart = regexp.MustCompile(`^(@\w|fun |val |var |private |internal |protected |public |override |open |abstract |suspend |inline |const |lateinit |companion |data |enum |sealed |inner |init\b|class |object |interface |static |final |void |[A-Z]\w*(<[^>]*>)?\s+\w+\s*\()`)
+
+// fixColumnZero indents declarations that sit at column 0 inside a class
+// body of a Kotlin or Java file, with the block that follows them. Code at
+// column 0 there is always a slip, and it compiles.
+func fixColumnZero(path, src string) (string, int) {
+	if !strings.HasSuffix(path, ".kt") && !strings.HasSuffix(path, ".java") {
+		return src, 0
+	}
+	lines := strings.Split(src, "\n")
+	unit := ""
+	for _, l := range lines {
+		if strings.HasPrefix(l, "\t") {
+			unit = "\t"
+			break
+		}
+		if n := len(l) - len(strings.TrimLeft(l, " ")); n > 0 && n < len(l) {
+			unit = strings.Repeat(" ", n)
+			break
+		}
+	}
+	if unit == "" {
+		unit = "    "
+	}
+	depths := braceDepths(lines)
+	if depths == nil {
+		return src, 0
+	}
+	fixed := 0
+	for i := 0; i < len(lines); i++ {
+		d := depths[i]
+		if d <= 0 || lines[i] == "" || lines[i][0] == ' ' || lines[i][0] == '\t' || !memberStart.MatchString(lines[i]) {
+			continue
+		}
+		pad := strings.Repeat(unit, d)
+		j := i
+		for ; j < len(lines); j++ {
+			if lines[j] != "" {
+				lines[j] = pad + lines[j]
+				fixed++
+			}
+			t := strings.TrimSpace(lines[j])
+			cont := strings.HasPrefix(t, "@") || strings.HasSuffix(t, "=") || strings.HasSuffix(t, ",") || strings.HasSuffix(t, "(") || strings.HasSuffix(t, ".")
+			if j+1 < len(lines) {
+				n := strings.TrimSpace(lines[j+1])
+				cont = cont || strings.HasPrefix(n, ".") || strings.HasPrefix(n, "?.") || strings.HasPrefix(n, ":")
+			}
+			if j+1 >= len(lines) || (depths[j+1] <= d && !cont) {
+				break
+			}
+		}
+		i = j
+	}
+	return strings.Join(lines, "\n"), fixed
+}
+
+// braceDepths gives the brace depth at the start of each line, skipping
+// strings, chars and comments. It returns nil when it cannot follow the file
+// (a multi-line string, or braces that do not balance).
+func braceDepths(lines []string) []int {
+	out := make([]int, len(lines))
+	d, inBlock := 0, false
+	for i, l := range lines {
+		out[i] = d
+		for k := 0; k < len(l); k++ {
+			c := l[k]
+			if inBlock {
+				if c == '*' && k+1 < len(l) && l[k+1] == '/' {
+					inBlock = false
+					k++
+				}
+				continue
+			}
+			switch {
+			case c == '/' && k+1 < len(l) && l[k+1] == '/':
+				k = len(l)
+			case c == '/' && k+1 < len(l) && l[k+1] == '*':
+				inBlock = true
+				k++
+			case c == '"' && strings.HasPrefix(l[k:], `"""`):
+				e := strings.Index(l[k+3:], `"""`)
+				if e < 0 {
+					return nil
+				}
+				k += e + 5
+			case c == '"' || c == '\'':
+				for k++; k < len(l) && l[k] != c; k++ {
+					if l[k] == '\\' {
+						k++
+					}
+				}
+			case c == '{':
+				d++
+			case c == '}':
+				d--
+			}
+		}
+	}
+	if d != 0 || inBlock {
+		return nil
+	}
+	return out
 }
 
 // sortImports sorts the import block of a Kotlin or Java file. Kotlin uses

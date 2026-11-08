@@ -1040,3 +1040,19 @@ func TestCheckExpects(t *testing.T) {
 		t.Fatal(v)
 	}
 }
+
+func TestFixColumnZero(t *testing.T) {
+	src := "package a\n\nclass A {\n    fun ok() = 1\n\ninternal fun isIp(s: String): Boolean {\n    return s.isNotEmpty()\n}\n\n    val s = \"{\"\n}\n\nfun top() {}\n"
+	want := "package a\n\nclass A {\n    fun ok() = 1\n\n    internal fun isIp(s: String): Boolean {\n        return s.isNotEmpty()\n    }\n\n    val s = \"{\"\n}\n\nfun top() {}\n"
+	got, n := fixColumnZero("A.kt", src)
+	if got != want || n != 3 {
+		t.Fatalf("n=%d\n%s", n, got)
+	}
+	one := "class B {\n@Test\nfun x() = 1\n}\n"
+	if got, n := fixColumnZero("B.kt", one); n != 2 || got != "class B {\n    @Test\n    fun x() = 1\n}\n" {
+		t.Fatalf("n=%d\n%s", n, got)
+	}
+	if _, n := fixColumnZero("C.kt", "class C {\n    val s = \"\"\"\n{\n\"\"\"\n}\n"); n != 0 {
+		t.Fatal("raw string")
+	}
+}
