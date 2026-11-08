@@ -171,7 +171,7 @@ func (a *Agent) chat(ctx context.Context, r Request, onDelta func(Delta) bool, e
 
 const selfCheckAsk = `Before you report, read the task again, mainly its "Done when" part and every numbered or bulleted requirement. For each one, say done or not done. For each numeric rule in the task (a range, a minimum or maximum, a limit, a default), name the file and line that enforces it, and check what happens at and past the edge. For each test you wrote, name the line of production code that would have to be wrong for it to fail; a test that cannot fail is not done. Fix every item that is not done. Then give the final report.`
 
-var negRe = regexp.MustCompile(`(?i)\b(do not|don't|dont|never|must not|mustn't|should not|shouldn't|avoid|not\s+\S+|instead of|no more than|without)\b`)
+var negRe = regexp.MustCompile(`(?i)\b(do not|don't|dont|never|must not|mustn't|should not|shouldn't|avoid|not\s+\S+|instead of|no more than|without|or blank|or empty|exactly|at least|at most|only if|unless)\b`)
 
 // negativeRules quotes the lines of the task that say what not to do. The
 // model slips on these more than on positive steps, so the self-check names
@@ -193,7 +193,7 @@ func negativeRules(prompt string) string {
 	if len(rules) == 0 {
 		return ""
 	}
-	return "\n\nThese lines of the task say what not to do. For each one, say whether your code keeps it, and quote the code if you are not sure:\n" + strings.Join(rules, "\n")
+	return "\n\nThese lines of the task say what not to do or give an exact rule (\"or blank\" is not \"or empty\"). For each one, say whether your code keeps it word for word, and quote the code if you are not sure:\n" + strings.Join(rules, "\n")
 }
 
 // doneWhen returns the "Done when" part of a task, or "".
@@ -500,7 +500,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				// turn, so the check lines describe the code as it ends.
 				// After the fix turn the model gets no more turns, so qh
 				// removes the unused imports itself.
-				failed := a.finalChecks(ctx, tools, checks, changed, wantClean, fixTurn, &st, emit)
+				failed := a.finalChecks(ctx, tools, prompt, checks, changed, wantClean, fixTurn, &st, emit)
 				if failed != "" && !fixTurn {
 					fixTurn = true
 					s.Msgs = append(s.Msgs, Message{Role: "user", From: "qh", Content: failed})
@@ -610,7 +610,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		emit(Event{T: "info", Text: fmt.Sprintf("stopped at the step limit (%d); asking for the report", limit)})
 		a.limitReport(ctx, s, system, schemas, emit, &told)
 		if !checked {
-			a.finalChecks(ctx, tools, checks, changed, wantClean, true, &st, emit)
+			a.finalChecks(ctx, tools, prompt, checks, changed, wantClean, true, &st, emit)
 		}
 	}
 	if !s.ReadOnly {
@@ -682,7 +682,7 @@ func firstLine(s string) string {
 // finalChecks runs the "Done when" commands and looks for unused imports in
 // the changed files. It returns a message for the model when something
 // should be fixed, or "".
-func (a *Agent) finalChecks(ctx context.Context, tools *Tools, cmds []string, changed map[string]bool, wantClean, fixImports bool, st *Stats, emit func(Event)) string {
+func (a *Agent) finalChecks(ctx context.Context, tools *Tools, prompt string, cmds []string, changed map[string]bool, wantClean, fixImports bool, st *Stats, emit func(Event)) string {
 	a.format(ctx, tools, changed, st, emit)
 	if fixImports {
 		// Before the checks, so a wrong removal shows as a failed build.
@@ -706,6 +706,19 @@ func (a *Agent) finalChecks(ctx context.Context, tools *Tools, cmds []string, ch
 		for _, imp := range unusedImports(f, string(b)) {
 			rel, _ := filepath.Rel(tools.Cwd, f)
 			notes = append(notes, fmt.Sprintf("%s: import %s is not used", rel, imp))
+		}
+	}
+	if miss := missingAnnotations(prompt, files); len(miss) > 0 {
+		emit(Event{T: "info", Text: fmt.Sprintf("%d annotations from the task are missing", len(miss))})
+		for _, m := range miss {
+			st.Checks = append(st.Checks, "qh note: "+m)
+		}
+		msg := "The task's code has annotations that the written files do not:\n" + strings.Join(miss, "\n") +
+			"\n\nAdd them (tests that build the class by hand do not catch this), build again, then give the final report."
+		if failed != "" {
+			failed += "\n\n" + msg
+		} else {
+			failed = msg
 		}
 	}
 	if len(notes) == 0 {
@@ -910,6 +923,63 @@ func removeUnusedImports(cwd string, changed map[string]bool, st *Stats, emit fu
 			st.Checks = append(st.Checks, fmt.Sprintf("qh removed unused imports from %s: %s", rel, strings.Join(unused, ", ")))
 		}
 	}
+}
+
+var annDecl = regexp.MustCompile(`((?:@\w+(?:\([^)]*\))?\s+)+)(?:(?:public|private|internal|protected|open|abstract|final|data|sealed|enum|static|suspend|override)\s+)*(class|object|interface|fun|record)\s+(\w+)`)
+
+var annName = regexp.MustCompile(`@(\w+)`)
+
+// missingAnnotations compares the annotations on classes and functions in
+// the task's code blocks with the changed files that declare them, and
+// lists the ones the files lack.
+func missingAnnotations(prompt string, files []string) []string {
+	var code strings.Builder
+	parts := strings.Split(prompt, "```")
+	for i := 1; i < len(parts); i += 2 {
+		code.WriteString(parts[i] + "\n")
+	}
+	type want struct {
+		kind, name string
+		anns       []string
+	}
+	var wants []want
+	for _, m := range annDecl.FindAllStringSubmatch(code.String(), -1) {
+		var anns []string
+		for _, a := range annName.FindAllStringSubmatch(m[1], -1) {
+			anns = append(anns, a[1])
+		}
+		wants = append(wants, want{m[2], m[3], anns})
+	}
+	if len(wants) == 0 {
+		return nil
+	}
+	srcs := map[string]string{}
+	for _, f := range files {
+		if b, err := os.ReadFile(f); err == nil {
+			srcs[f] = string(b)
+		}
+	}
+	var out []string
+	for _, w := range wants {
+		decl := regexp.MustCompile(`(?m)^((?:\s*@\w+(?:\([^)]*\))?\s*\n?)*)[^\n@]*\b` + w.kind + `\s+` + w.name + `\b`)
+		for f, src := range srcs {
+			m := decl.FindStringSubmatch(src)
+			if m == nil {
+				continue
+			}
+			have := map[string]bool{}
+			for _, a := range annName.FindAllStringSubmatch(m[0], -1) {
+				have[a[1]] = true
+			}
+			for _, a := range w.anns {
+				if !have[a] {
+					out = append(out, fmt.Sprintf("%s: %s %s has no @%s", filepath.Base(f), w.kind, w.name, a))
+				}
+			}
+			break
+		}
+	}
+	return out
 }
 
 // Kotlin operator and delegate names: an import of these is used without

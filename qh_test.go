@@ -960,3 +960,16 @@ func TestCheckSpans(t *testing.T) {
 		t.Fatal(v)
 	}
 }
+
+func TestMissingAnnotations(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "MailRenderer.kt")
+	os.WriteFile(f, []byte("package a\n\nclass MailRenderer(val x: Int) {\n    @Scheduled(cron = \"0 0 * * *\")\n    fun run() {}\n}\n"), 0o644)
+	g := filepath.Join(dir, "Cfg.kt")
+	os.WriteFile(g, []byte("package a\n\n@Configuration\nclass Cfg\n"), 0o644)
+	prompt := "Do it.\n\n```kotlin\n@Component\nclass MailRenderer(private val x: Int) {\n    @Scheduled(cron = \"0 0 * * *\")\n    fun run() {}\n}\n```\n\n```kotlin\n@Configuration\nclass Cfg\n```"
+	got := missingAnnotations(prompt, []string{f, g})
+	if len(got) != 1 || got[0] != "MailRenderer.kt: class MailRenderer has no @Component" {
+		t.Fatalf("got %q", got)
+	}
+}
