@@ -220,7 +220,7 @@ func TestReadOnlyTools(t *testing.T) {
 	if out, ok := tl.Run(ctx, "ls", `{}`); !ok || out != "src/\n" {
 		t.Fatalf("ls: %q", out)
 	}
-	if len(toolSchemas(true)) != 3 || len(toolSchemas(false)) != 8 {
+	if len(toolSchemas(true)) != 3 || len(toolSchemas(false)) != 9 {
 		t.Fatal("schemas")
 	}
 }

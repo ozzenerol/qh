@@ -35,6 +35,7 @@ usage:
   qh eval [-only a,b] [-n N]   run the benchmark tasks with this build; -compare A.json B.json, -list
   qh undo [-s session] [-list] [-force]  restore the files the last run changed
   qh diff [-s session]         show what the last run changed, as a unified diff
+  qh lookup [-C dir] NAME      the import lines for NAME from the project's libraries
   qh serve                     run the daemon in the foreground
   qh stop                      stop the daemon
   qh status                    show if the daemon runs
@@ -94,6 +95,8 @@ func main() {
 		err = undoCmd(args)
 	case "diff":
 		err = diffCmd(args)
+	case "lookup":
+		err = lookupCmd(args)
 	case "stop":
 		if c, e := net.DialTimeout("unix", sockPath(), time.Second); e == nil {
 			c.Close()
