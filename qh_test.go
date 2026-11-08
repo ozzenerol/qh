@@ -900,3 +900,15 @@ func TestCheckVerdict(t *testing.T) {
 		t.Fatal(v)
 	}
 }
+
+func TestRemoveUnusedImports(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "A.kt")
+	os.WriteFile(f, []byte("package a\n\nimport java.time.Instant\nimport java.time.ZoneOffset\nimport org.y.Thing as Other\n\nclass A(val at: Instant)\n"), 0o644)
+	st := &Stats{}
+	removeUnusedImports(dir, map[string]bool{f: true}, st, func(Event) {})
+	b, _ := os.ReadFile(f)
+	if string(b) != "package a\n\nimport java.time.Instant\nimport org.y.Thing as Other\n\nclass A(val at: Instant)\n" || len(st.Checks) != 1 {
+		t.Fatalf("file %q checks %q", b, st.Checks)
+	}
+}

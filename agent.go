@@ -416,7 +416,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			if !checked {
 				// The checks run after the report, and once more after a fix
 				// turn, so the check lines describe the code as it ends.
-				failed := a.finalChecks(ctx, tools, checks, changed, wantClean, &st, emit)
+				// After the fix turn the model gets no more turns, so qh
+				// removes the unused imports itself.
+				failed := a.finalChecks(ctx, tools, checks, changed, wantClean, fixTurn, &st, emit)
 				if failed != "" && !fixTurn {
 					fixTurn = true
 					s.Msgs = append(s.Msgs, Message{Role: "user", From: "qh", Content: failed})
@@ -512,7 +514,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		emit(Event{T: "info", Text: fmt.Sprintf("stopped at the step limit (%d); asking for the report", limit)})
 		a.limitReport(ctx, s, system, schemas, emit, &told)
 		if !checked {
-			a.finalChecks(ctx, tools, checks, changed, wantClean, &st, emit)
+			a.finalChecks(ctx, tools, checks, changed, wantClean, true, &st, emit)
 		}
 	}
 	st.Secs = time.Since(t0).Seconds()
@@ -579,8 +581,12 @@ func firstLine(s string) string {
 // finalChecks runs the "Done when" commands and looks for unused imports in
 // the changed files. It returns a message for the model when something
 // should be fixed, or "".
-func (a *Agent) finalChecks(ctx context.Context, tools *Tools, cmds []string, changed map[string]bool, wantClean bool, st *Stats, emit func(Event)) string {
+func (a *Agent) finalChecks(ctx context.Context, tools *Tools, cmds []string, changed map[string]bool, wantClean, fixImports bool, st *Stats, emit func(Event)) string {
 	a.format(ctx, tools, changed, st, emit)
+	if fixImports {
+		// Before the checks, so a wrong removal shows as a failed build.
+		removeUnusedImports(tools.Cwd, changed, st, emit)
+	}
 	failed := ""
 	if len(cmds) > 0 {
 		failed = a.runChecks(ctx, tools, cmds, wantClean, st, emit)
@@ -767,6 +773,42 @@ func sortImports(path, src string) string {
 
 func importKey(l string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(l, "import "), "static "), ";")
+}
+
+// removeUnusedImports deletes the import lines that unusedImports reports in
+// the changed files and notes each file in the report.
+func removeUnusedImports(cwd string, changed map[string]bool, st *Stats, emit func(Event)) {
+	files := make([]string, 0, len(changed))
+	for f := range changed {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		unused := unusedImports(f, string(b))
+		if len(unused) == 0 {
+			continue
+		}
+		drop := map[string]bool{}
+		for _, u := range unused {
+			drop[u] = true
+		}
+		var keep []string
+		for _, l := range strings.Split(string(b), "\n") {
+			if m := importRe.FindStringSubmatch(l); m != nil && m[3] == "" && m[5] == "" && drop[m[2]] {
+				continue
+			}
+			keep = append(keep, l)
+		}
+		if os.WriteFile(f, []byte(strings.Join(keep, "\n")), 0o644) == nil {
+			rel, _ := filepath.Rel(cwd, f)
+			emit(Event{T: "info", Text: fmt.Sprintf("removed %d unused imports from %s", len(unused), rel)})
+			st.Checks = append(st.Checks, fmt.Sprintf("qh removed unused imports from %s: %s", rel, strings.Join(unused, ", ")))
+		}
+	}
 }
 
 // Kotlin operator and delegate names: an import of these is used without
