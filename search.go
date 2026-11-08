@@ -17,8 +17,10 @@ const (
 
 const grepHint = "[qh: the pattern is a regular expression and ( [ { * . have meanings there. For a literal search set literal to true, or escape them.]"
 
-// skipDirs are never searched: VCS data, dependencies and build output.
-var skipDirs = map[string]bool{".git": true, "node_modules": true, "build": true, ".gradle": true, "target": true}
+// skipDirs are never searched: dependencies and build output. Hidden
+// folders (.git, .cargo, .m2, .venv) are skipped too, unless the search
+// starts inside one.
+var skipDirs = map[string]bool{"node_modules": true, "build": true, "target": true, "vendor": true, "__pycache__": true, "venv": true}
 
 // globMatch matches a slash path against a pattern where ** stands for any
 // number of directories. A pattern without a slash matches the base name.
@@ -65,7 +67,7 @@ func (t *Tools) walk(ctx context.Context, root string, fn func(path, rel string)
 			return ctx.Err()
 		}
 		if d.IsDir() {
-			if p != root && skipDirs[d.Name()] {
+			if p != root && (skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
 				return filepath.SkipDir
 			}
 			return nil

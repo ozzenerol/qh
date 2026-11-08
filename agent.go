@@ -288,7 +288,8 @@ To check that a library has a class or top-level function and how to import it, 
 To check a library API, print its signatures (javap -cp JAR CLASS, go doc PKG.NAME, python -c "help(...)") instead of unpacking its sources.
 Use edit for small changes and write for new files. In edit, copy old exactly from the file and leave out the line numbers.
 Do not ask for permission. Do the task.
-When you finish, reply with a short report: the files you changed, and the result of the last build or test. If you could not finish, say what is left.`
+If the user asks a general question or wants example code, answer it from what you know; search the files only when the question is about the code in this folder.
+When you finish a task, reply with a short report: the files you changed, and the result of the last build or test. If you could not finish, say what is left.`
 
 const systemPromptRO = `You are a coding agent in a read-only run. You work in %s on %s. Your tools are read, grep and ls. You cannot change files or run commands.
 

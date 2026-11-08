@@ -1155,3 +1155,20 @@ func TestCheckTimesRun(t *testing.T) {
 		t.Fatalf("%q %q", msg, st.Checks)
 	}
 }
+
+func TestGlobSkipsHidden(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, ".cargo", "registry"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "src"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".cargo", "registry", "a.rs"), nil, 0o644)
+	os.WriteFile(filepath.Join(dir, "src", "main.rs"), nil, 0o644)
+	tools := &Tools{Cwd: dir}
+	out, _ := tools.Run(context.Background(), "glob", `{"pattern":"**/*.rs"}`)
+	if strings.Contains(out, ".cargo") || !strings.Contains(out, "src/main.rs") {
+		t.Fatal(out)
+	}
+	out, _ = tools.Run(context.Background(), "glob", `{"pattern":"**/*.rs","path":".cargo"}`)
+	if !strings.Contains(out, "a.rs") {
+		t.Fatal("inside hidden root: " + out)
+	}
+}
