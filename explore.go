@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -129,4 +130,34 @@ func (a *Agent) explore(ctx context.Context, cwd, rawArgs string, st *Stats, emi
 		answer = strings.Join(l[:exploreMaxLines], "\n") + fmt.Sprintf("\n[qh: answer cut at %d lines]", exploreMaxLines)
 	}
 	return answer, true
+}
+
+const exploreNudgeText = "\n\n[qh: for a search like this, explore keeps the results out of your context: explore {question: ...}]"
+
+var bashSearch = regexp.MustCompile(`^\s*(cd\s+\S+\s*&&\s*)?(grep|rg|find|ag)\b`)
+
+// exploreNudge counts search calls in a row. After 5 with no edit between
+// them, once the context passes 30k tokens, it suggests explore, once a run.
+type exploreNudge struct {
+	run  int
+	done bool
+}
+
+func (n *exploreNudge) after(name, rawArgs string, ctxTokens int) string {
+	search := name == "grep" || name == "glob" || name == "read" || name == "ls"
+	if name == "bash" {
+		var a struct{ Command string }
+		json.Unmarshal([]byte(rawArgs), &a)
+		search = bashSearch.MatchString(a.Command)
+	}
+	if !search {
+		n.run = 0
+		return ""
+	}
+	n.run++
+	if n.done || n.run < 5 || ctxTokens <= 30000 {
+		return ""
+	}
+	n.done = true
+	return exploreNudgeText
 }

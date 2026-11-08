@@ -130,3 +130,78 @@ func TestExploreStepLimit(t *testing.T) {
 		t.Fatal(out)
 	}
 }
+
+func TestExploreNudge(t *testing.T) {
+	var n exploreNudge
+	calls := []struct{ name, args string }{
+		{"grep", `{"pattern":"a"}`}, {"read", `{"path":"x"}`}, {"bash", `{"command":"cd src && rg foo"}`},
+		{"glob", `{"pattern":"*.go"}`},
+	}
+	for _, c := range calls {
+		if n.after(c.name, c.args, 40000) != "" {
+			t.Fatal("nudge before 5 searches")
+		}
+	}
+	if n.after("edit", `{}`, 40000) != "" || n.run != 0 {
+		t.Fatal("an edit must reset the count")
+	}
+	for i := 0; i < 5; i++ {
+		if got := n.after("grep", `{}`, 20000); got != "" {
+			t.Fatal("nudge below 30k tokens")
+		}
+	}
+	if n.after("bash", `{"command":"go test ./..."}`, 40000) != "" || n.run != 0 {
+		t.Fatal("a build command is not a search")
+	}
+	for i := 1; i <= 5; i++ {
+		got := n.after("bash", `{"command":"find . -name '*.go'"}`, 40000)
+		if (i == 5) != (got == exploreNudgeText) {
+			t.Fatalf("call %d: %q", i, got)
+		}
+	}
+	if n.after("grep", `{}`, 40000) != "" {
+		t.Fatal("nudged twice in a run")
+	}
+}
+
+// The nudge lands in the tool result of the 5th search in a row of a run.
+func TestExploreNudgeInRun(t *testing.T) {
+	for _, tc := range []struct {
+		prompt int
+		off    bool
+		want   int
+	}{{40000, false, 1}, {1000, false, 0}, {40000, true, 0}} {
+		n := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n++
+			w.Header().Set("Content-Type", "text/event-stream")
+			if n <= 7 {
+				fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c%d\",\"function\":{\"name\":\"grep\",\"arguments\":\"{\\\"pattern\\\":\\\"x%d\\\"}\"}}]}}]}\n\n", n, n)
+			} else {
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n")
+			}
+			fmt.Fprintf(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":%d,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n", tc.prompt)
+		}))
+		a := &Agent{LLM: &LLM{BaseURL: srv.URL, Model: "m", HTTP: srv.Client()}, Cfg: Config{MaxSteps: 20, MaxTokens: 100, ThinkBudget: 30000}}
+		if tc.off {
+			off := false
+			a.Cfg.Explore = &off
+		}
+		s := &Session{Name: "n", Cwd: t.TempDir()}
+		a.Run(context.Background(), s, "look", "you", func(Event) {})
+		srv.Close()
+		var got []int
+		k := 0
+		for _, m := range s.Msgs {
+			if m.Role == "tool" {
+				k++
+				if strings.Contains(m.Content, "explore keeps the results") {
+					got = append(got, k)
+				}
+			}
+		}
+		if len(got) != tc.want || tc.want == 1 && got[0] != 5 {
+			t.Fatalf("%+v: nudge in tool results %v", tc, got)
+		}
+	}
+}

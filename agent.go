@@ -468,6 +468,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	nudges := 0                // times the model was told to stop digging
 	editFile, editRun := "", 0 // edits in a row on one file
 	lastErrs := ""             // the compiler errors of the last failed build
+	var nudge exploreNudge     // suggests explore after many searches in a big context
 	blocked := 0               // library commands blocked after the second nudge
 	reactiveTold := false
 	removed := map[string]int{} // rm -r targets of bash commands in this run
@@ -672,6 +673,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				summary = failLine(out)
 			}
 			emit(Event{T: "result", Tool: tc.Function.Name, OK: ok, Text: summary})
+			if !s.ReadOnly && a.exploreOn() {
+				out += nudge.after(tc.Function.Name, tc.Function.Arguments, s.LastPrompt)
+			}
 			s.Msgs = append(s.Msgs, Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name, Content: out})
 			if ctx.Err() != nil {
 				break
