@@ -26,6 +26,8 @@ type Session struct {
 	Todo       []TodoItem `json:"todo,omitempty"`
 	LastPrompt int        `json:"last_prompt"` // tokens of the last request
 	Msgs       []Message  `json:"messages"`
+	System     string     `json:"system,omitempty"`  // the system prompt, kept for the session (see systemPrompt)
+	SysKey     string     `json:"sys_key,omitempty"` // the cwd and mode it was built for
 	mu         sync.Mutex // held for the whole run
 
 	wmu      sync.Mutex // guards watchers and cancel
@@ -413,7 +415,8 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Seen: s.seen}
 	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
 	schemas := toolSchemas(s.ReadOnly)
-	system := Message{Role: "system", Content: buildSystem(s.Cwd, s.ReadOnly)}
+	s.answerOpen()
+	system := Message{Role: "system", Content: s.systemPrompt()}
 	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})
 	if a.Save != nil {
 		a.Save()
@@ -650,6 +653,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			s.Msgs = append(s.Msgs, Message{Role: "user", From: "compact",
 				Content: "Continue the task from the summary. Check the files before you change them again."})
 			todoDue = true
+			system.Content = s.systemPrompt()
 		}
 	}
 	if !ended && st.Steps >= limit && ctx.Err() == nil {

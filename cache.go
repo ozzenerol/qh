@@ -1,0 +1,44 @@
+package main
+
+import "strconv"
+
+// systemPrompt returns the system prompt of the session. mlx_lm.server reuses
+// its cache only for a request that starts with the same tokens, so the
+// prompt is built once and kept for the whole session, even when AGENTS.md,
+// the notes or the source folders change during it. It is built again for an
+// empty session, after compaction, and when the folder or read-only mode
+// changes, since the cache is lost then anyway.
+func (s *Session) systemPrompt() string {
+	key := s.Cwd + "\x00" + strconv.FormatBool(s.ReadOnly)
+	if s.System == "" || s.SysKey != key || len(s.Msgs) == 0 {
+		s.System, s.SysKey = buildSystem(s.Cwd, s.ReadOnly), key
+	}
+	return s.System
+}
+
+// answerOpen gives every tool call of the last assistant message that has no
+// result an "interrupted" one. A run stopped in the middle of its calls
+// leaves them open, and the next request needs a result for each call. The
+// results are appended, so the request still extends the cached one.
+func (s *Session) answerOpen() {
+	for i := len(s.Msgs) - 1; i >= 0; i-- {
+		m := s.Msgs[i]
+		if m.Role == "tool" {
+			continue
+		}
+		if m.Role != "assistant" {
+			return
+		}
+		done := map[string]bool{}
+		for _, r := range s.Msgs[i+1:] {
+			done[r.ToolCallID] = true
+		}
+		for _, tc := range m.ToolCalls {
+			if !done[tc.ID] {
+				s.Msgs = append(s.Msgs, Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name,
+					Content: "error: the run was interrupted before this call ran"})
+			}
+		}
+		return
+	}
+}
