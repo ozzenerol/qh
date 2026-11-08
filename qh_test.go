@@ -701,8 +701,13 @@ func TestGrepLineHintDidYouMean(t *testing.T) {
 	if out, ok := tl.Run(ctx, "edit", `{"path":"common/id/UuidV7.kt","old":"x = 1","new":"x = 2","line":4}`); !ok || !strings.Contains(out, "line 4") {
 		t.Fatalf("line hint: %s", out)
 	}
-	if out, _ := tl.Run(ctx, "read", `{"path":"auth/id/UuidV7.kt"}`); !strings.Contains(out, "did you mean: common/id/UuidV7.kt") {
-		t.Fatalf("did you mean: %s", out)
+	if out, ok := tl.Run(ctx, "read", `{"path":"auth/id/UuidV7.kt"}`); !ok || !strings.Contains(out, "This is common/id/UuidV7.kt") {
+		t.Fatalf("one candidate: %s", out)
+	}
+	os.MkdirAll(filepath.Join(dir, "other"), 0o755)
+	os.WriteFile(filepath.Join(dir, "other", "UuidV7.kt"), nil, 0o644)
+	if out, ok := tl.Run(ctx, "read", `{"path":"auth/id/UuidV7.kt"}`); ok || !strings.Contains(out, "did you mean:") {
+		t.Fatalf("two candidates: %s", out)
 	}
 }
 
@@ -857,7 +862,7 @@ func TestFindDecl(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "err", "Errors.kt"), []byte("package e\n\nopen class BadRequestException : RuntimeException()\n"), 0o644)
 	tl := &Tools{Cwd: dir}
 	out, _ := tl.Run(context.Background(), "read", `{"path":"err/BadRequestException.kt"}`)
-	if !strings.Contains(out, "declared here: err/Errors.kt:3") {
+	if !strings.Contains(out, "This is err/Errors.kt, the file that declares BadRequestException (line 3)") || !strings.Contains(out, "open class BadRequestException") {
 		t.Fatalf("decl: %s", out)
 	}
 }
@@ -884,5 +889,14 @@ func TestPassGrace(t *testing.T) {
 	st := a.Run(context.Background(), s, "Do it.\n\nDone when: it works", "", func(Event) {})
 	if st.Limit || n != 4 {
 		t.Fatalf("limit=%v n=%d", st.Limit, n)
+	}
+}
+
+func TestCheckVerdict(t *testing.T) {
+	if v := checkVerdict([]string{"qh check passed: a", "qh check passed with 1 warnings: b", "qh note: x"}); !strings.Contains(v, "all 2") {
+		t.Fatal(v)
+	}
+	if v := checkVerdict([]string{"qh check passed: a", "qh check FAILED: b"}); !strings.Contains(v, "1 of 2") {
+		t.Fatal(v)
 	}
 }

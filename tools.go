@@ -152,10 +152,26 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		p, _ := s("path")
 		out, ok := t.read(t.path(p), n("offset", 1), n("limit", readDefault))
 		if !ok && strings.Contains(out, "no such file") {
-			if m := t.findByName(filepath.Base(p)); len(m) > 0 {
+			// One clear candidate: read it at once, so the guess does not
+			// cost a step. Several: list them.
+			m := t.findByName(filepath.Base(p))
+			note := "the only file with that name"
+			if len(m) == 0 {
+				if d := t.findDecl(strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))); len(d) > 0 {
+					m = nil
+					for _, x := range d {
+						m = append(m, x[:strings.LastIndex(x, ":")])
+					}
+					note = "the file that declares " + strings.TrimSuffix(filepath.Base(p), filepath.Ext(p)) + " (line " + d[0][strings.LastIndex(d[0], ":")+1:] + ")"
+				}
+			}
+			switch {
+			case len(m) == 1:
+				if o2, ok2 := t.read(t.path(m[0]), n("offset", 1), n("limit", readDefault)); ok2 {
+					return "note: " + p + " does not exist. This is " + m[0] + ", " + note + ".\n" + o2, true
+				}
+			case len(m) > 1:
 				out += "\ndid you mean: " + strings.Join(m, ", ")
-			} else if d := t.findDecl(strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))); len(d) > 0 {
-				out += "\nno file has that name, but the type is declared here: " + strings.Join(d, ", ")
 			}
 		}
 		return out, ok
