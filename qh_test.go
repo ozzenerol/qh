@@ -1207,3 +1207,10 @@ func TestTimeoutStillChecks(t *testing.T) {
 		t.Fatalf("%+v", st.Checks)
 	}
 }
+
+func TestStatLineTiming(t *testing.T) {
+	l := statLine(&Stats{Model: "m", Steps: 3, Output: 600, Secs: 100, GenTokens: 600, GenSecs: 12, PrefillSecs: 20, ToolSecs: 60, WaitSecs: 5})
+	if !strings.Contains(l, "model: 50.0 tok/s writing, 20s reading the prompt; tools 60s; waited 5s for another session") {
+		t.Fatal(l)
+	}
+}

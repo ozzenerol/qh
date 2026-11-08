@@ -68,6 +68,8 @@ type Tools struct {
 	Cwd      string
 	ReadOnly bool
 
+	busy time.Duration // time spent in Run, for the stats
+
 	Diag        map[string]string    // file extension -> checker command run after a write or edit
 	DiagTimeout time.Duration        // per check
 	Seen        map[string]*fileSeen // path -> what qh last showed the model of it
@@ -100,6 +102,7 @@ func (t *Tools) path(p string) string {
 
 // Run executes one tool call and returns the text for the model.
 func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
+	defer func(t0 time.Time) { t.busy += time.Since(t0) }(time.Now())
 	args := map[string]any{}
 	if strings.TrimSpace(rawArgs) != "" {
 		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {

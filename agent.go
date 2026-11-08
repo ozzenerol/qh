@@ -129,6 +129,11 @@ type Stats struct {
 	ToolErrs     int            `json:"tool_errors"`
 	Removes      int            `json:"removes,omitempty"`       // rm -r targets in bash commands
 	CmdFails     int            `json:"failed_commands"`         // commands that ran and exited non-zero (failing builds and tests); not in ToolErrs
+	PrefillSecs  float64        `json:"prefill_secs,omitempty"`  // model time before the first token of each answer (reading the prompt)
+	GenSecs      float64        `json:"gen_secs,omitempty"`      // model time from the first token to the end of each answer
+	GenTokens    int            `json:"gen_tokens,omitempty"`    // tokens the model wrote in that time, helper runs included
+	WaitSecs     float64        `json:"wait_secs,omitempty"`     // time waiting for another session's model request
+	ToolSecs     float64        `json:"tool_secs,omitempty"`     // time in tools: builds, tests, searches
 	TimedOut     bool           `json:"timed_out,omitempty"`     // the run hit its -timeout; checks ran afterwards
 	Limit        bool           `json:"step_limit,omitempty"`    // the run stopped at max_steps
 	Checks       []string       `json:"checks,omitempty"`        // results of the "Done when" commands
@@ -164,11 +169,20 @@ type Agent struct {
 	// a time limit. When that limit hits, qh still runs the Done-when checks
 	// in Wrap, so a timed-out run reports what state it left.
 	Wrap context.Context
+
+	tm timing // model time of this run, filled by chat
+}
+
+// timing splits where a run's model time went.
+type timing struct {
+	prefill, gen, wait time.Duration
+	genTokens          int
 }
 
 // chat sends one request through the gate. The model server answers one
 // request at a time, so a run of another session waits here and says so once.
 func (a *Agent) chat(ctx context.Context, r Request, onDelta func(Delta) bool, emit func(Event), told *bool) (Message, Usage, error) {
+	start := time.Now()
 	if a.Gate != nil {
 		select {
 		case a.Gate <- struct{}{}:
@@ -194,7 +208,23 @@ func (a *Agent) chat(ctx context.Context, r Request, onDelta func(Delta) bool, e
 		}
 		defer func() { <-a.Gate }()
 	}
-	return a.LLM.Chat(ctx, r, onDelta)
+	a.tm.wait += time.Since(start)
+	t0 := time.Now()
+	var first time.Time
+	msg, u, err := a.LLM.Chat(ctx, r, func(d Delta) bool {
+		if first.IsZero() {
+			first = time.Now()
+		}
+		return onDelta(d)
+	})
+	end := time.Now()
+	if first.IsZero() {
+		first = end
+	}
+	a.tm.prefill += first.Sub(t0)
+	a.tm.gen += end.Sub(first)
+	a.tm.genTokens += u.CompletionTokens
+	return msg, u, err
 }
 
 const selfCheckAsk = `Before you report, read the task again, mainly its "Done when" part and every numbered or bulleted requirement. For each one, say done or not done. For each numeric rule in the task (a range, a minimum or maximum, a limit, a default), name the file and line that enforces it, and check what happens at and past the edge. For each assertion in the tests you wrote, describe the smallest wrong implementation (for example: the expiry is reset on every call, the limit is off by one, the field is never set) and say whether the assertion fails on it. An assertion that still passes on that wrong code, like "ttl <= 3600" when the bug would also give 3600, is not done: make it exact. Watch for state that another thread sets later: an assertion made before it is set passes whatever the code does. For every try/catch you wrote, list the calls inside the try that can throw the caught type, and say for each one whether the task wants it handled that way; keep the try around only those calls. Fix every item that is not done. Then give the final report.`
@@ -428,6 +458,7 @@ func looping(s string) bool {
 func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit func(Event)) Stats {
 	t0 := time.Now()
 	st := Stats{Model: filepath.Base(a.LLM.Model), Window: a.Cfg.Context}
+	a.tm = timing{}
 	if n := dropOldThinking(s.Msgs); n > 0 {
 		st.ThinkDropped = n
 		s.LastPrompt = max(0, s.LastPrompt-n)
@@ -756,6 +787,11 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	st.Todo = todoOpen(s.Todo)
 	st.Ctx = ctxByTool(s.Msgs)
 	st.Secs = time.Since(t0).Seconds()
+	st.PrefillSecs = a.tm.prefill.Seconds()
+	st.GenSecs = a.tm.gen.Seconds()
+	st.WaitSecs = a.tm.wait.Seconds()
+	st.GenTokens = a.tm.genTokens
+	st.ToolSecs = tools.busy.Seconds()
 	return st
 }
 
