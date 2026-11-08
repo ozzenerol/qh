@@ -326,6 +326,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	checked := s.ReadOnly
 	changed := map[string]bool{} // files that write and edit changed in this run
 	digs := 0                    // library-digging commands since the last change
+	nudges := 0                  // times the model was told to stop digging
 	lastErrs := ""               // the compiler errors of the last failed build
 	fixTurn := false             // the model got one turn to fix failed checks
 	wantClean := noWarnings.MatchString(prompt)
@@ -415,7 +416,13 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			key := tc.Function.Name + "\x00" + normArgs(tc.Function.Arguments)
 			seen[key]++
 			emit(Event{T: "tool", Tool: tc.Function.Name, Text: argSummary(tc.Function.Name, tc.Function.Arguments)})
-			out, ok := tools.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+			var out string
+			var ok bool
+			if nudges >= 2 && tc.Function.Name == "bash" && libDig.MatchString(tc.Function.Arguments) {
+				out = "error: qh blocks digging in library jars and caches for the rest of this run. Write the code and compile it; the compiler names any class or method that is missing."
+			} else {
+				out, ok = tools.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+			}
 			if i := strings.Index(out, "[qh: compiler errors]\n"); i >= 0 {
 				e := out[i+len("[qh: compiler errors]\n"):]
 				if j := strings.Index(e, "\n["); j >= 0 {
@@ -427,15 +434,20 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			case tc.Function.Name == "write" || tc.Function.Name == "edit":
 				digs = 0
 			case tc.Function.Name == "bash" && libDig.MatchString(tc.Function.Arguments):
-				if digs++; digs == 3 && lastErrs != "" {
-					out += "\n\n[qh: stop exploring the library. The build failed with these errors:\n" + lastErrs +
-						"\nRead the line each error points to and fix it there.]"
-					emit(Event{T: "info", Text: "library digging: pointing the model back at the compiler errors"})
-				} else if digs == 3 {
-					out += "\n\n[qh: stop exploring the library. Go back to the failing build or test output and fix the line it points to.]"
-				}
-				if digs >= 3 {
+				if digs++; digs >= 3 {
 					digs = 0
+					nudges++
+					if lastErrs != "" {
+						out += "\n\n[qh: stop exploring the library. The build failed with these errors:\n" + lastErrs +
+							"\nRead the line each error points to and fix it there.]"
+						emit(Event{T: "info", Text: "library digging: pointing the model back at the compiler errors"})
+					} else {
+						out += "\n\n[qh: stop exploring the library. Write the code and compile it; the compiler will tell you if a class or method is missing.]"
+						emit(Event{T: "info", Text: "library digging: telling the model to compile instead"})
+					}
+					if nudges == 2 {
+						out += "\n[qh: from now on, commands that read library jars or caches are blocked in this run.]"
+					}
 				}
 			}
 			if n := seen[key]; n >= 3 {
@@ -755,16 +767,30 @@ const limitAsk = `You reached the step limit, and the tools are off now. Write t
 // run still ends with one.
 func (a *Agent) limitReport(ctx context.Context, s *Session, system Message, schemas []map[string]any, emit func(Event), told *bool) {
 	s.Msgs = append(s.Msgs, Message{Role: "user", From: "qh", Content: limitAsk})
-	msg, _, err := a.chat(ctx, Request{Messages: append([]Message{system}, s.Msgs...), Tools: schemas, Think: false, MaxTok: a.Cfg.MaxTokens},
-		func(d Delta) bool {
-			if d.Text != "" {
-				emit(Event{T: "text", Text: d.Text})
-			}
-			return true
-		}, emit, told)
-	if err != nil {
-		emit(Event{T: "error", Text: err.Error()})
-		return
+	// The tools stay in the request (they are part of the cached prompt), so
+	// the model may still call one. Then it gets "tools are off" and one more try.
+	var msg Message
+	for try := 0; try < 3; try++ {
+		var err error
+		msg, _, err = a.chat(ctx, Request{Messages: append([]Message{system}, s.Msgs...), Tools: schemas, Think: false, MaxTok: a.Cfg.MaxTokens},
+			func(d Delta) bool {
+				if d.Text != "" {
+					emit(Event{T: "text", Text: d.Text})
+				}
+				return true
+			}, emit, told)
+		if err != nil {
+			emit(Event{T: "error", Text: err.Error()})
+			return
+		}
+		if len(msg.ToolCalls) == 0 || try == 2 {
+			break
+		}
+		s.Msgs = append(s.Msgs, msg)
+		for _, tc := range msg.ToolCalls {
+			s.Msgs = append(s.Msgs, Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name,
+				Content: "error: the tools are off after the step limit. Write the final report now, as text."})
+		}
 	}
 	msg.ToolCalls = nil // calls without results would break the next request
 	if strings.TrimSpace(msg.Content) == "" {

@@ -771,3 +771,51 @@ func TestPatternHint(t *testing.T) {
 		t.Fatalf("grep tool hint: %s", out)
 	}
 }
+
+func TestFindTool(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755)
+	os.WriteFile(filepath.Join(dir, "a", "b", "X.kt"), nil, 0o644)
+	os.WriteFile(filepath.Join(dir, "a", "Y.java"), nil, 0o644)
+	tl := &Tools{Cwd: dir}
+	if out, ok := tl.Run(context.Background(), "find", `{"pattern":"**/*.kt"}`); !ok || out != "a/b/X.kt" {
+		t.Fatalf("find: %q", out)
+	}
+	if out, _ := tl.Run(context.Background(), "glob", `{"name":"*.go"}`); out != "no matches" {
+		t.Fatalf("glob: %q", out)
+	}
+}
+
+func TestLimitReportRetryAndDigBlock(t *testing.T) {
+	dir := t.TempDir()
+	n := 0
+	var last []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []Message `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		last = append(last, body.Messages[len(body.Messages)-1].Content)
+		n++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if n <= 9 { // 8 dig steps (the 7th and 8th are blocked), then the first report try is a tool call too
+			args, _ := json.Marshal(map[string]string{"command": fmt.Sprintf("echo %d; ls ~/.gradle/caches", n)})
+			call, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{
+				map[string]any{"index": 0, "id": fmt.Sprint("c", n), "function": map[string]any{"name": "bash", "arguments": string(args)}}}}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", call)
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"the report\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	a := &Agent{LLM: &LLM{BaseURL: srv.URL, Model: "m", HTTP: srv.Client()}, Cfg: Config{MaxSteps: 8, MaxTokens: 100, ThinkBudget: 30000}}
+	s := &Session{Name: "t", Cwd: dir}
+	st := a.Run(context.Background(), s, "go", "", func(Event) {})
+	all := strings.Join(last, "\n----\n")
+	if strings.Count(all, "compile it") < 2 || !strings.Contains(all, "are blocked") || !strings.Contains(all, "blocks digging") || !strings.Contains(all, "tools are off after the step limit") {
+		t.Fatalf("nudges: %q", last)
+	}
+	if !st.Limit || s.Msgs[len(s.Msgs)-1].Content != "the report" {
+		t.Fatalf("report: %+v", s.Msgs[len(s.Msgs)-1])
+	}
+}

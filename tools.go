@@ -114,6 +114,20 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		return "error: this is a read-only run; the tools are read, grep and ls", false
 	}
 	switch name {
+	case "find", "glob":
+		// Not in the tool list, but the model calls them; answer them.
+		pat, _ := s("pattern")
+		if pat == "" {
+			pat, _ = s("name")
+		}
+		if pat == "" {
+			pat = "*"
+		}
+		p, ok := s("path")
+		if !ok || p == "" {
+			p = "."
+		}
+		return t.find(t.path(p), pat)
 	case "grep":
 		if e := need("pattern"); e != "" {
 			return e, false
@@ -502,6 +516,45 @@ func nearest(src, old string) string {
 	}
 	b.WriteString("Copy old from these lines, without the line numbers.")
 	return b.String()
+}
+
+// find lists the files under root whose name (or path, when the pattern has
+// a slash) matches a glob pattern. "**/" in the pattern is ignored.
+func (t *Tools) find(root, pat string) (string, bool) {
+	pat = strings.ReplaceAll(pat, "**/", "")
+	var out []string
+	n := 0
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "build" || d.Name() == "target" || d.Name() == ".gradle") {
+			return filepath.SkipDir
+		}
+		rel, _ := filepath.Rel(t.Cwd, p)
+		target := d.Name()
+		if strings.Contains(pat, "/") {
+			target = rel
+		}
+		if ok, _ := filepath.Match(pat, target); ok && rel != "." {
+			n++
+			if len(out) < 200 {
+				if d.IsDir() {
+					rel += "/"
+				}
+				out = append(out, rel)
+			}
+		}
+		return nil
+	})
+	if n == 0 {
+		return "no matches", true
+	}
+	res := strings.Join(out, "\n")
+	if n > len(out) {
+		res += fmt.Sprintf("\n... and %d more", n-len(out))
+	}
+	return res, true
 }
 
 // findByName lists up to 5 project files with the given base name.
