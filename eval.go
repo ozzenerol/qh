@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -233,19 +234,20 @@ func (a *Agent) runEval(ctx context.Context, tasks []EvalTask, only []string, n 
 		want[o] = true
 	}
 	var pick []EvalTask
+	missing := maps.Clone(want)
 	for _, t := range tasks {
 		if len(want) == 0 || want[t.Name] {
 			pick = append(pick, t)
-			delete(want, t.Name)
+			delete(missing, t.Name)
 		}
 	}
-	if len(want) > 0 {
+	if len(missing) > 0 {
 		var names []string
 		for _, t := range tasks {
 			names = append(names, t.Name)
 		}
 		var miss []string
-		for w := range want {
+		for w := range missing {
 			miss = append(miss, w)
 		}
 		return nil, fmt.Errorf("no task %s (tasks: %s)", strings.Join(miss, ", "), strings.Join(names, " "))

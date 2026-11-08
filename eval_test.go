@@ -64,6 +64,10 @@ func TestEvalRunner(t *testing.T) {
 	if _, err := a.runEval(context.Background(), tasks, []string{"nope"}, 1, time.Minute, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "bad good") {
 		t.Fatalf("unknown task: %v", err)
 	}
+	if rs, err := a.runEval(context.Background(), tasks, []string{"bad"}, 1, time.Minute, io.Discard, io.Discard); err != nil || len(rs) != 1 || rs[0].Task != "bad" {
+		t.Fatalf("-only bad ran %+v %v", rs, err)
+	}
+	n = 0
 	var out bytes.Buffer
 	rs, err := a.runEval(context.Background(), tasks, nil, 2, time.Minute, &out, io.Discard)
 	if err != nil || len(rs) != 4 || n != 4 {

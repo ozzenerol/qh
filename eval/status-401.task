@@ -1,4 +1,4 @@
-GET /me must answer 401 with the JSON body {"error":"unauthorized"} when the Authorization header is missing or the bearer token is unknown. A known token still gets 200 and the user. Add a test for the 401 case.
+GET /me must answer 401 with the JSON body {"error":"unauthorized"} when the Authorization header is missing, is not of the form `Bearer TOKEN`, or has an unknown token. A known token still gets 200 and the user. Add a test for the 401 case.
 
 Done when: `go test ./...` passes.
 -- check.sh --
