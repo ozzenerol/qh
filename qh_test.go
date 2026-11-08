@@ -34,7 +34,7 @@ func TestEdit(t *testing.T) {
 	tl := &Tools{Cwd: dir}
 	ctx := context.Background()
 
-	if out, ok := tl.Run(ctx, "edit", `{"path":"a.go","old":"\treturn 1","new":"\treturn 2"}`); ok || !strings.Contains(out, "2 times") {
+	if out, ok := tl.Run(ctx, "edit", `{"path":"a.go","old":"\treturn 1","new":"\treturn 2"}`); ok || !strings.Contains(out, "2 times") || !strings.Contains(out, "5\tfunc b() {") {
 		t.Fatalf("duplicate: %s", out)
 	}
 	// trailing spaces and read-tool line numbers in old still match

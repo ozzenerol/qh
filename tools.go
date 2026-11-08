@@ -390,8 +390,8 @@ func (t *Tools) edit(fp, shown, old, nw string, all bool, near int) (string, boo
 	case cnt == 0:
 		return "error: old text not found in " + shown + ". " + nearest(src, old), false
 	case cnt > 1 && !all && near <= 0:
-		return fmt.Sprintf("error: old text appears %d times in %s (lines %s). Add more lines around it so it is unique, pass line=N with the line of the one to change, or set all=true.",
-			cnt, shown, lineNums(src, old)), false
+		return fmt.Sprintf("error: old text appears %d times in %s (lines %s). Pass line=N to change the match at line N (one call per match), set all=true to change every match, or add a line around old that makes it unique. The matches with the lines around them:\n%s",
+			cnt, shown, lineNums(src, old), matchContext(src, old)), false
 	}
 	at := strings.Index(src, old)
 	if cnt > 1 && !all {
@@ -673,6 +673,27 @@ func (t *Tools) filesWith(ctx context.Context, old string) []string {
 		}
 	}
 	return out
+}
+
+// matchContext shows up to 5 matches of sub with one line before and after.
+func matchContext(src, sub string) string {
+	lines := strings.Split(src, "\n")
+	n := strings.Count(sub, "\n") + 1
+	var b strings.Builder
+	off := 0
+	for k := 0; k < 5; k++ {
+		i := strings.Index(src[off:], sub)
+		if i < 0 {
+			break
+		}
+		start := strings.Count(src[:off+i], "\n")
+		for l := max(0, start-1); l < min(len(lines), start+n+1); l++ {
+			fmt.Fprintf(&b, "%d\t%s\n", l+1, lines[l])
+		}
+		b.WriteString("--\n")
+		off += i + len(sub)
+	}
+	return strings.TrimSuffix(b.String(), "--\n")
 }
 
 func lineNums(src, sub string) string {

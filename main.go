@@ -269,8 +269,8 @@ func statLine(st *Stats) string {
 	if st.Window > 0 {
 		pct := st.Prompt * 100 / st.Window
 		line += fmt.Sprintf(" (%d%% of %d)", pct, st.Window)
-		if pct >= 60 {
-			line += "; the session is getting big: start a new one or run qh compact -s NAME"
+		if pct >= 60 || st.Prompt > 80000 {
+			line += "; the session is big and slower now (tok/s falls with context): use a new session for the next feature, or qh compact -s NAME"
 		}
 	}
 	return line
