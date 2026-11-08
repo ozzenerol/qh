@@ -341,7 +341,12 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	wantClean := noWarnings.MatchString(prompt)
 	defer s.setState(false, 0)
 
-	for st.Steps < a.Cfg.MaxSteps {
+	// limit grows by passGrace for each pass that qh asks for after the
+	// model's answer (self-check, fixes after the checks), so a run that
+	// finished its task does not run out of steps in the clean-up.
+	const passGrace = 15
+	limit := a.Cfg.MaxSteps
+	for st.Steps < limit {
 		st.Steps++
 		s.setState(true, st.Steps)
 		think := s.Think
@@ -405,6 +410,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				selfChecked = true
 				emit(Event{T: "info", Text: "self-check: asking the model to compare its work with the task"})
 				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk, From: "qh"})
+				limit = max(limit, st.Steps+passGrace)
 				continue
 			}
 			if !checked {
@@ -414,6 +420,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				if failed != "" && !fixTurn {
 					fixTurn = true
 					s.Msgs = append(s.Msgs, Message{Role: "user", From: "qh", Content: failed})
+					limit = max(limit, st.Steps+passGrace)
 					continue
 				}
 				checked = true
@@ -485,9 +492,11 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			emit(Event{T: "info", Text: "interrupted"})
 			break
 		}
-		if left := a.Cfg.MaxSteps - st.Steps; left == 5 {
-			last := &s.Msgs[len(s.Msgs)-1]
+		last := &s.Msgs[len(s.Msgs)-1]
+		if left := limit - st.Steps; left == 5 {
 			last.Content += "\n\n[qh: 5 steps left before the step limit. Finish the work, run the check, and write the final report.]"
+		} else if st.Steps%10 == 0 {
+			last.Content += fmt.Sprintf("\n\n[qh: step %d of %d]", st.Steps, limit)
 		}
 		if s.LastPrompt > a.compactAt() {
 			if err := a.Compact(ctx, s, "the task that is in progress now", emit); err != nil {
@@ -498,9 +507,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				Content: "Continue the task from the summary. Check the files before you change them again."})
 		}
 	}
-	if !ended && st.Steps >= a.Cfg.MaxSteps && ctx.Err() == nil {
+	if !ended && st.Steps >= limit && ctx.Err() == nil {
 		st.Limit = true
-		emit(Event{T: "info", Text: fmt.Sprintf("stopped at the step limit (%d); asking for the report", a.Cfg.MaxSteps)})
+		emit(Event{T: "info", Text: fmt.Sprintf("stopped at the step limit (%d); asking for the report", limit)})
 		a.limitReport(ctx, s, system, schemas, emit, &told)
 		if !checked {
 			a.finalChecks(ctx, tools, checks, changed, wantClean, &st, emit)

@@ -861,3 +861,28 @@ func TestFindDecl(t *testing.T) {
 		t.Fatalf("decl: %s", out)
 	}
 }
+
+func TestPassGrace(t *testing.T) {
+	dir := t.TempDir()
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if n <= 2 {
+			args, _ := json.Marshal(map[string]string{"command": "echo hi"})
+			call, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{
+				map[string]any{"index": 0, "id": fmt.Sprint("c", n), "function": map[string]any{"name": "bash", "arguments": string(args)}}}}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", call)
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"report\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	a := &Agent{LLM: &LLM{BaseURL: srv.URL, Model: "m", HTTP: srv.Client()}, Cfg: Config{MaxSteps: 3, MaxTokens: 100, ThinkBudget: 30000}}
+	s := &Session{Name: "t", Cwd: dir}
+	// the answer comes at step 3 of 3; the self-check still gets its step
+	st := a.Run(context.Background(), s, "Do it.\n\nDone when: it works", "", func(Event) {})
+	if st.Limit || n != 4 {
+		t.Fatalf("limit=%v n=%d", st.Limit, n)
+	}
+}
