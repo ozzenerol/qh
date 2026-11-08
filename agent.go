@@ -626,7 +626,7 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, want
 		}
 		emit(Event{T: "result", Tool: "check", OK: ok, Text: summary})
 		if ok {
-			w := warningLines(out)
+			w := warningLines(out, a.Cfg.WarnIgnore)
 			if wantClean && len(w) > 0 {
 				st.Checks = append(st.Checks, fmt.Sprintf("qh check passed with %d warnings: %s", len(w), c))
 				warns = append(warns, w...)
@@ -659,19 +659,36 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, want
 // noWarnings matches a task that asks for code without warnings.
 var noWarnings = regexp.MustCompile(`(?i)unused|no warnings|without warnings|warning-free|zero warnings`)
 
-var warnLine = regexp.MustCompile(`(?i)^w: |\bwarning:|\[warning\]|is never used|unused import|declared and not used|imported and not used`)
+// warnLine matches compiler warnings only: Kotlin "w: ", javac, gcc and
+// clang "file:line: warning:", Maven compiler "[WARNING] File.java:[l,c]", Go
+// "declared and not used". JVM runtime notices ("WARNING: sun.misc.Unsafe
+// ...") are not compiler warnings and do not count.
+var warnLine = regexp.MustCompile(`^w: |\S+\.\w+:\d+(:\d+)?: warning:|^\[WARNING\] \S+\.(java|kt|scala):\[\d+|is never used|unused import|declared and not used|imported and not used`)
 
-// warningLines returns the compiler warnings in out (Kotlin "w: ", javac,
-// gcc and clang "warning:", Maven "[WARNING]", Go "declared and not used").
-func warningLines(out string) []string {
+// warningLines returns the compiler warnings in out, minus deprecation
+// notices and lines that match one of the ignore patterns.
+func warningLines(out string, ignore []string) []string {
+	var ign []*regexp.Regexp
+	for _, p := range ignore {
+		if re, err := regexp.Compile(p); err == nil {
+			ign = append(ign, re)
+		}
+	}
 	var w []string
 	seen := map[string]bool{}
+next:
 	for _, l := range strings.Split(out, "\n") {
 		l = strings.TrimSpace(l)
-		if warnLine.MatchString(l) && !seen[l] && !strings.Contains(strings.ToLower(l), "deprecat") {
-			seen[l] = true
-			w = append(w, oneLine(l, 300))
+		if !warnLine.MatchString(l) || seen[l] || strings.Contains(strings.ToLower(l), "deprecat") {
+			continue
 		}
+		for _, re := range ign {
+			if re.MatchString(l) {
+				continue next
+			}
+		}
+		seen[l] = true
+		w = append(w, oneLine(l, 300))
 	}
 	return w
 }

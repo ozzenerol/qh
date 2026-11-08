@@ -21,7 +21,7 @@ What qh does:
 - There are four tools: read, write, edit and bash. edit takes one `old`/`new` pair. It still matches when the model copies the line numbers from read or drops trailing spaces. When `old` is not in the file, the error shows the closest lines with their numbers, so the model can copy them without reading the file again. When the model leaves out `path` and only one file holds `old`, qh edits that file and says so. When nothing matches exactly, lines that look nearly the same are used to find the place. write says how many lines it added and removed compared with the old file. When `old` appears more than once, the error lists the lines, and `line=N` picks the match nearest to line N. A read of a missing file suggests project files with the same name. A grep or rg that finds nothing is not counted as a failed call. A read-only run (`-ro`) gets read, grep and ls, and no shell.
 - If the server leaves a `<tool_call>` block in the text, qh parses it.
 - The third identical tool call gets a note that the result will not change.
-- When the task has a "Done when" line, qh asks the model once, before the final report, to check each requirement and fix what is missing. In a normal (not read-only) run it then runs the commands in backticks on that line, such as `./mvnw -q test`. If one fails, the model gets the output and one more turn, and the commands run again after it; the report ends with one `qh check passed:` or `qh check FAILED:` line per command. When the task asks for no warnings or no unused code, compiler warnings in the check output (Kotlin `w:`, `warning:`, Maven `[WARNING]`) count as a failure for that turn. qh also reads the Kotlin and Java files that the run wrote or edited, and lists each import whose name is not used again in the file (kotlinc does not warn about these); the model gets one turn to remove them.
+- When the task has a "Done when" line, qh asks the model once, before the final report, to check each requirement and fix what is missing. In a normal (not read-only) run it then runs the commands in backticks on that line, such as `./mvnw -q test`. If one fails, the model gets the output and one more turn, and the commands run again after it; the report ends with one `qh check passed:` or `qh check FAILED:` line per command. When the task asks for no warnings or no unused code, compiler warnings in the check output count as a failure for that turn (see `warn_ignore` below). qh also reads the Kotlin and Java files that the run wrote or edited, and lists each import whose name is not used again in the file (kotlinc does not warn about these); the model gets one turn to remove them.
 - The model server answers one request at a time, so the daemon sends one at a time. A run on another session waits and shows "waiting for the model".
 - Tool output longer than 12000 characters is cut in the middle. The end is kept, since errors are usually there.
 
@@ -77,11 +77,12 @@ On a small test (one failing Python test, Qwen3.6-35B-A3B on an M3 Max), qh fixe
   "max_tokens": 16384,
   "think_budget": 30000,
   "context": 262144,
-  "compact_at": 0
+  "compact_at": 0,
+  "warn_ignore": []
 }
 ```
 
-An empty `model` means the first model the server lists. `compact_at` 0 means 80% of `context`. `QH_URL`, `QH_MODEL`, `QH_HOME` and `QH_SOCK` override the file.
+An empty `model` means the first model the server lists. `compact_at` 0 means 80% of `context`. `warn_ignore` holds regular expressions for compiler warning lines that the "Done when" checks should not count. Only compiler warnings count (Kotlin `w:`, `file:line: warning:`, Maven compiler `[WARNING] File.java:[l,c]`); JVM notices such as `WARNING: sun.misc.Unsafe` do not. `QH_URL`, `QH_MODEL`, `QH_HOME` and `QH_SOCK` override the file.
 
 The system prompt is about 150 words. qh adds `~/.qh/AGENTS.md`, then `~/.qh/notes/REPO.md` (REPO is the folder name of the git repo that holds the working directory; a good place for API facts and repo notes that should not be committed), then `AGENTS.md` (or `CLAUDE.md` when a directory has no `AGENTS.md`) from `/` down to the working directory.
 

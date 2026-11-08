@@ -599,8 +599,15 @@ func TestStepLimit(t *testing.T) {
 
 func TestWarningLines(t *testing.T) {
 	out := "> Task :compileKotlin\nw: file:///a/B.kt:3:8 Unused import directive\nw: file:///a/C.kt:9:5 Variable 'x' is never used\nw: file:///a/D.kt:1:1 'foo' is deprecated\nBUILD SUCCESSFUL"
-	if w := warningLines(out); len(w) != 2 {
+	if w := warningLines(out, nil); len(w) != 2 {
 		t.Fatalf("warnings: %q", w)
+	}
+	jvm := "WARNING: sun.misc.Unsafe::allocateMemory has been called by io.netty.util.internal.PlatformDependent0\nWARNING: Please consider reporting this\nA.java:3: warning: [rawtypes] found raw type\nw: file:///x/Gen.kt:1:1 Unchecked cast"
+	if w := warningLines(jvm, nil); len(w) != 2 {
+		t.Fatalf("jvm noise counted: %q", w)
+	}
+	if w := warningLines(jvm, []string{"Gen\\.kt"}); len(w) != 1 {
+		t.Fatalf("ignore list: %q", w)
 	}
 	if !noWarnings.MatchString("Done when: build passes with no unused imports") || noWarnings.MatchString("Done when: tests pass") {
 		t.Fatal("noWarnings")

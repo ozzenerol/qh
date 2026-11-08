@@ -19,13 +19,14 @@ import (
 )
 
 type Config struct {
-	URL         string `json:"url"`
-	Model       string `json:"model"`
-	MaxSteps    int    `json:"max_steps"`
-	MaxTokens   int    `json:"max_tokens"`
-	ThinkBudget int    `json:"think_budget"` // chars of thinking in one step
-	Context     int    `json:"context"`      // the model's context window in tokens
-	CompactAt   int    `json:"compact_at"`   // compact when a request passes this; 0 means 80% of context
+	URL         string   `json:"url"`
+	Model       string   `json:"model"`
+	MaxSteps    int      `json:"max_steps"`
+	MaxTokens   int      `json:"max_tokens"`
+	ThinkBudget int      `json:"think_budget"` // chars of thinking in one step
+	Context     int      `json:"context"`      // the model's context window in tokens
+	CompactAt   int      `json:"compact_at"`   // compact when a request passes this; 0 means 80% of context
+	WarnIgnore  []string `json:"warn_ignore"`  // regular expressions of warning lines that the checks ignore
 }
 
 func qhDir() (string, error) {
