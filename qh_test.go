@@ -64,7 +64,7 @@ func TestReadAndBash(t *testing.T) {
 		t.Fatalf("read tail: %q", out)
 	}
 	out, _ = tl.Run(context.Background(), "read", `{"path":"big.txt"}`)
-	if !strings.Contains(out, "use offset=401") {
+	if !strings.Contains(out, "use offset=201") {
 		t.Fatalf("read head: %q", out[len(out)-80:])
 	}
 	out, ok := tl.Run(context.Background(), "bash", `{"command":"echo hi; exit 3"}`)

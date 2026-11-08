@@ -38,7 +38,9 @@ type Session struct {
 	waiting  bool   // the run waits for the model (another session uses it)
 	from     string // who started the run
 
-	seen map[string]*fileSeen // files qh showed the model, for the stale-file guard
+	seen  map[string]*fileSeen // files qh showed the model, for the stale-file guard
+	reads map[string]*readMark // reads whose result the model got, for the re-read note
+	runs  int                  // runs so far in this daemon
 }
 
 func (s *Session) setFrom(f string) {
@@ -110,24 +112,25 @@ func (s *Session) cancelRun() bool {
 }
 
 type Stats struct {
-	Model        string   `json:"model"`
-	Steps        int      `json:"steps"`
-	Prompt       int      `json:"prompt_tokens"`
-	Cached       int      `json:"cached_tokens"`
-	Fresh        int      `json:"fresh_tokens"`
-	Explores     int      `json:"explore_runs,omitempty"` // explore sub-runs; their steps and tokens are not in the fields above
-	ExploreSteps int      `json:"explore_steps,omitempty"`
-	ExploreOut   int      `json:"explore_output_tokens,omitempty"`
-	ExploreFresh int      `json:"explore_fresh_tokens,omitempty"` // prompt tokens of all requests that were not in the server's cache
-	Output       int      `json:"output_tokens"`
-	Thinking     int      `json:"thinking_chars"`
-	Secs         float64  `json:"secs"`
-	Retries      int      `json:"retries"`
-	Window       int      `json:"window"`
-	ToolErrs     int      `json:"tool_errors"`
-	Limit        bool     `json:"step_limit,omitempty"` // the run stopped at max_steps
-	Checks       []string `json:"checks,omitempty"`     // results of the "Done when" commands
-	Todo         []string `json:"todo_open,omitempty"`  // todo items not done at the end
+	Model        string         `json:"model"`
+	Steps        int            `json:"steps"`
+	Prompt       int            `json:"prompt_tokens"`
+	Cached       int            `json:"cached_tokens"`
+	Fresh        int            `json:"fresh_tokens"`
+	Explores     int            `json:"explore_runs,omitempty"` // explore sub-runs; their steps and tokens are not in the fields above
+	ExploreSteps int            `json:"explore_steps,omitempty"`
+	ExploreOut   int            `json:"explore_output_tokens,omitempty"`
+	ExploreFresh int            `json:"explore_fresh_tokens,omitempty"` // prompt tokens of all requests that were not in the server's cache
+	Output       int            `json:"output_tokens"`
+	Thinking     int            `json:"thinking_chars"`
+	Secs         float64        `json:"secs"`
+	Retries      int            `json:"retries"`
+	Window       int            `json:"window"`
+	ToolErrs     int            `json:"tool_errors"`
+	Limit        bool           `json:"step_limit,omitempty"`  // the run stopped at max_steps
+	Checks       []string       `json:"checks,omitempty"`      // results of the "Done when" commands
+	Todo         []string       `json:"todo_open,omitempty"`   // todo items not done at the end
+	Ctx          map[string]int `json:"ctx_by_tool,omitempty"` // tokens (chars/4) of tool results in the context at the end, per tool
 }
 
 type Event struct {
@@ -419,6 +422,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	if s.seen == nil {
 		s.seen = map[string]*fileSeen{}
 	}
+	s.runs++
 	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Seen: s.seen}
 	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
 	if !s.ReadOnly {
@@ -562,8 +566,13 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				out, ok = runTodo(s, tc.Function.Arguments, emit)
 			} else if tc.Function.Name == "explore" && !s.ReadOnly && a.exploreOn() {
 				out, ok = a.explore(ctx, s.Cwd, tc.Function.Arguments, &st, emit, &told)
+			} else if note := s.reread(tools, tc.Function.Name, tc.Function.Arguments, st.Steps); note != "" {
+				out, ok = note, true
 			} else {
 				out, ok = tools.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+				if tc.Function.Name == "read" && ok {
+					s.sawRead(tools, tc.Function.Arguments, tc.ID, out, st.Steps)
+				}
 			}
 			if i := strings.Index(out, "[qh: compiler errors]\n"); i >= 0 {
 				e := out[i+len("[qh: compiler errors]\n"):]
@@ -696,6 +705,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		}
 	}
 	st.Todo = todoOpen(s.Todo)
+	st.Ctx = ctxByTool(s.Msgs)
 	st.Secs = time.Since(t0).Seconds()
 	return st
 }
