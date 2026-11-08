@@ -1071,3 +1071,14 @@ func TestStatusMismatchBody(t *testing.T) {
 		t.Fatal(f)
 	}
 }
+
+func TestNegativeAsserts(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "src", "test", "kotlin", "JwtIT.kt")
+	os.MkdirAll(filepath.Dir(f), 0o755)
+	os.WriteFile(f, []byte("val s = mapper.writeValueAsString(bytes)\nassertThat(s).doesNotContain(\"aud\")\nassertThat(s).contains(\"x\")\n"), 0o644)
+	got := negativeAsserts(map[string]bool{f: true, filepath.Join(dir, "Main.kt"): true})
+	if !strings.Contains(got, "JwtIT.kt:2: assertThat(s).doesNotContain") || strings.Contains(got, ":3:") {
+		t.Fatal(got)
+	}
+}

@@ -499,7 +499,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			if !selfChecked {
 				selfChecked = true
 				emit(Event{T: "info", Text: "self-check: asking the model to compare its work with the task"})
-				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk + negativeRules(prompt), From: "qh"})
+				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk + negativeRules(prompt) + negativeAsserts(changed), From: "qh"})
 				limit = max(limit, st.Steps+passGrace)
 				continue
 			}
@@ -1102,6 +1102,37 @@ func strayFiles(dir string) []string {
 		}
 	}
 	return fs
+}
+
+var negAssert = regexp.MustCompile(`doesNotContain|doesNotHave|isNotEqualTo|isNotIn\b|assertNotEquals|assertFalse|isFalse\(\)|wasNot\s+Called|exactly\s*=\s*0|times\(0\)|never\(\)|shouldNot`)
+
+// negativeAsserts quotes the assertions in changed test files that check
+// for absence. They pass on empty, encoded or wrong values, so the
+// self-check asks what the value holds when the code is right.
+func negativeAsserts(changed map[string]bool) string {
+	files := make([]string, 0, len(changed))
+	for f := range changed {
+		if isTestPath(f) {
+			files = append(files, f)
+		}
+	}
+	sort.Strings(files)
+	var out []string
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for i, l := range strings.Split(string(b), "\n") {
+			if negAssert.MatchString(l) && len(out) < 15 {
+				out = append(out, fmt.Sprintf("%s:%d: %s", filepath.Base(f), i+1, strings.TrimSpace(l)))
+			}
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return "\n\nThese assertions check that something is absent. Each passes when the value is empty, encoded (base64, escaped) or the wrong object. For each one, say what the checked value holds when the code is right, and make sure it would contain the thing if the code were wrong:\n" + strings.Join(out, "\n")
 }
 
 // isTestPath is true for files named like tests or kept under a test folder.
