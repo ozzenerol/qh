@@ -1238,3 +1238,22 @@ func TestLineEditKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestScope(t *testing.T) {
+	p := "Fix it.\n\nChange only:\n- services/api/src/main/kotlin/a/Moderation.kt\n- `services/api/src/test/kotlin/a/ModerationTest.kt`\n\nDone when: tests pass."
+	got := outsideScope(p, []fileFact{{rel: "services/api/src/main/kotlin/a/Moderation.kt"}, {rel: "services/api/src/test/kotlin/a/QueueIT.kt"}, {rel: "x/Y.kt", formatOnly: true}})
+	if strings.Join(got, ",") != "services/api/src/test/kotlin/a/QueueIT.kt" {
+		t.Fatalf("%q", got)
+	}
+	if outsideScope("no list here", []fileFact{{rel: "a.go"}}) != nil {
+		t.Fatal("no list")
+	}
+	if got := scopeFiles("Change only RoutesConfig.kt and gateway/RateLimitKeys.kt."); len(got) != 2 {
+		t.Fatalf("inline %q", got)
+	}
+	dir := t.TempDir()
+	msg := scopeCheck(p, map[string]bool{filepath.Join(dir, "services/api/src/test/kotlin/a/QueueIT.kt"): true}, dir)
+	if !strings.Contains(msg, "Changed outside the brief:") || !strings.Contains(msg, "QueueIT.kt") {
+		t.Fatal(msg)
+	}
+}

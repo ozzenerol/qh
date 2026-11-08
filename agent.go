@@ -586,7 +586,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			if !selfChecked {
 				selfChecked = true
 				emit(Event{T: "info", Text: "self-check: asking the model to compare its work with the task"})
-				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk + negativeRules(prompt) + negativeAsserts(changed) + todoSelfCheck(s.Todo), From: "qh"})
+				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk + negativeRules(prompt) + negativeAsserts(changed) + scopeCheck(prompt, changed, s.Cwd) + todoSelfCheck(s.Todo), From: "qh"})
 				limit = max(limit, st.Steps+passGrace)
 				continue
 			}
@@ -785,6 +785,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			report = s.Msgs[n-1].Content
 		}
 		st.Facts = facts(report, tools.Undo.changes(), tools.Tests, stopped, tools.Undo != nil)
+		if out := outsideScope(prompt, tools.Undo.changes()); len(out) > 0 {
+			st.Facts = append(st.Facts, "qh facts: changed outside the files the task allows: "+strings.Join(out, ", "))
+		}
 	}
 	st.Todo = todoOpen(s.Todo)
 	st.Ctx = ctxByTool(s.Msgs)

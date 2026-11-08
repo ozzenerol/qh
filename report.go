@@ -465,3 +465,77 @@ func lastDiff(root string) (string, error) {
 	}
 	return b.String(), nil
 }
+
+var (
+	scopeStart = regexp.MustCompile(`(?i)^\s*[-*]?\s*(change only|only change|you may (only )?change|edit only|only edit|touch only|only touch|files you may change)\b`)
+	scopePath  = regexp.MustCompile("[A-Za-z0-9_.\\-]+(?:/[A-Za-z0-9_.\\-]+)+|[A-Za-z0-9_\\-]+\\.[A-Za-z0-9]{1,6}\\b")
+	scopeItem  = regexp.MustCompile(`^\s*([-*]|\d+[.)])\s+`)
+)
+
+// scopeFiles reads the files a task allows from a "Change only:" line and
+// the list items under it. It returns nil when the task names no such list.
+func scopeFiles(prompt string) []string {
+	lines := strings.Split(prompt, "\n")
+	var out []string
+	for i := 0; i < len(lines); i++ {
+		if !scopeStart.MatchString(lines[i]) {
+			continue
+		}
+		out = append(out, scopePath.FindAllString(lines[i], -1)...)
+		for j := i + 1; j < len(lines) && scopeItem.MatchString(lines[j]); j++ {
+			out = append(out, scopePath.FindAllString(lines[j], -1)...)
+		}
+	}
+	return out
+}
+
+func inScope(rel string, allowed []string) bool {
+	for _, a := range allowed {
+		a = strings.TrimPrefix(strings.TrimSuffix(a, "/"), "./")
+		if rel == a || strings.HasSuffix(rel, "/"+a) || strings.HasPrefix(rel, a+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// outsideScope lists the changed files that the task's "Change only" list
+// does not allow.
+func outsideScope(prompt string, files []fileFact) []string {
+	allowed := scopeFiles(prompt)
+	if len(allowed) == 0 {
+		return nil
+	}
+	var out []string
+	for _, f := range files {
+		if !f.formatOnly && !inScope(f.rel, allowed) {
+			out = append(out, f.rel)
+		}
+	}
+	return out
+}
+
+// scopeCheck asks the model, in the self-check, to name the files it
+// changed outside the task's list and why.
+func scopeCheck(prompt string, changed map[string]bool, cwd string) string {
+	allowed := scopeFiles(prompt)
+	if len(allowed) == 0 {
+		return ""
+	}
+	var out []string
+	for f := range changed {
+		rel, err := filepath.Rel(cwd, f)
+		if err != nil {
+			rel = f
+		}
+		if !inScope(filepath.ToSlash(rel), allowed) {
+			out = append(out, rel)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	sort.Strings(out)
+	return "\n\nThe task allows changes only to its listed files, and you changed these too: " + strings.Join(out, ", ") +
+		". Undo a change the task did not need. Keep one only if the task cannot pass without it, and then list it in the final report under the heading \"Changed outside the brief:\" with one line per file and the reason."
+}
