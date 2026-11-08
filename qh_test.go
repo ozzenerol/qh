@@ -819,3 +819,34 @@ func TestLimitReportRetryAndDigBlock(t *testing.T) {
 		t.Fatalf("report: %+v", s.Msgs[len(s.Msgs)-1])
 	}
 }
+
+func TestSortImports(t *testing.T) {
+	src := "package a\n\nimport org.slf4j.MDC\nimport java.time.Instant\nimport org.slf4j.LoggerFactory\nimport kotlin.math.max\nimport org.x.Y as Z\nimport com.b.C\nimport org.slf4j.MDC\n\nclass A\n"
+	want := "package a\n\nimport com.b.C\nimport org.slf4j.LoggerFactory\nimport org.slf4j.MDC\nimport java.time.Instant\nimport kotlin.math.max\nimport org.x.Y as Z\n\nclass A\n"
+	if got := sortImports("A.kt", src); got != want {
+		t.Fatalf("kotlin:\n%s", got)
+	}
+	j := "package a;\n\nimport static org.junit.Assert.assertTrue;\nimport java.util.List;\nimport com.b.C;\n\nclass A {}\n"
+	wantJ := "package a;\n\nimport com.b.C;\nimport java.util.List;\n\nimport static org.junit.Assert.assertTrue;\n\nclass A {}\n"
+	if got := sortImports("A.java", j); got != wantJ {
+		t.Fatalf("java:\n%s", got)
+	}
+	if c := "import b.B // keep\nimport a.A\n"; sortImports("A.kt", c) != c {
+		t.Fatal("a block with comments must stay")
+	}
+}
+
+func TestFormatConfig(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "myrepo", ".git"), 0o755)
+	f := filepath.Join(dir, "myrepo", "A.kt")
+	os.WriteFile(f, []byte("import b.B\nimport a.A\n\nclass A\n"), 0o644)
+	on := true
+	a := &Agent{Cfg: Config{Repos: map[string]FormatCfg{"myrepo": {SortImports: &on, Format: map[string]string{".kt": "echo formatted >>"}}}}}
+	st := &Stats{}
+	a.format(context.Background(), &Tools{Cwd: filepath.Join(dir, "myrepo")}, map[string]bool{f: true}, st, func(Event) {})
+	b, _ := os.ReadFile(f)
+	if string(b) != "import a.A\nimport b.B\n\nclass A\nformatted\n" || len(st.Checks) != 2 {
+		t.Fatalf("file %q checks %q", b, st.Checks)
+	}
+}

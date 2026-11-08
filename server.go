@@ -18,6 +18,13 @@ import (
 	"time"
 )
 
+// FormatCfg says what qh does to the files a run changed, after the model's
+// final answer and before the checks.
+type FormatCfg struct {
+	Format      map[string]string `json:"format,omitempty"`       // file extension -> command; the file paths go at the end
+	SortImports *bool             `json:"sort_imports,omitempty"` // sort the imports of Kotlin and Java files
+}
+
 type Config struct {
 	URL         string   `json:"url"`
 	Model       string   `json:"model"`
@@ -27,6 +34,8 @@ type Config struct {
 	Context     int      `json:"context"`      // the model's context window in tokens
 	CompactAt   int      `json:"compact_at"`   // compact when a request passes this; 0 means 80% of context
 	WarnIgnore  []string `json:"warn_ignore"`  // regular expressions of warning lines that the checks ignore
+	FormatCfg
+	Repos map[string]FormatCfg `json:"repos"` // settings for one repo, by the folder name of its git root
 }
 
 func qhDir() (string, error) {

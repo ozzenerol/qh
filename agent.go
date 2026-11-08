@@ -256,15 +256,9 @@ func contextFiles(cwd string) []string {
 		if p := filepath.Join(d, "AGENTS.md"); exists(p) {
 			out = append(out, p)
 		}
-		for r := cwd; ; r = filepath.Dir(r) {
-			if _, err := os.Stat(filepath.Join(r, ".git")); err == nil {
-				if p := filepath.Join(d, "notes", filepath.Base(r)+".md"); exists(p) {
-					out = append(out, p)
-				}
-				break
-			}
-			if r == filepath.Dir(r) {
-				break
+		if r := repoName(cwd); r != "" {
+			if p := filepath.Join(d, "notes", r+".md"); exists(p) {
+				out = append(out, p)
 			}
 		}
 	}
@@ -284,6 +278,18 @@ func contextFiles(cwd string) []string {
 		}
 	}
 	return out
+}
+
+// repoName is the folder name of the git repo that holds dir, or "".
+func repoName(dir string) string {
+	for r := dir; ; r = filepath.Dir(r) {
+		if _, err := os.Stat(filepath.Join(r, ".git")); err == nil {
+			return filepath.Base(r)
+		}
+		if r == filepath.Dir(r) {
+			return ""
+		}
+	}
 }
 
 func exists(p string) bool {
@@ -562,6 +568,7 @@ func firstLine(s string) string {
 // the changed files. It returns a message for the model when something
 // should be fixed, or "".
 func (a *Agent) finalChecks(ctx context.Context, tools *Tools, cmds []string, changed map[string]bool, wantClean bool, st *Stats, emit func(Event)) string {
+	a.format(ctx, tools, changed, st, emit)
 	failed := ""
 	if len(cmds) > 0 {
 		failed = a.runChecks(ctx, tools, cmds, wantClean, st, emit)
@@ -595,6 +602,159 @@ func (a *Agent) finalChecks(ctx context.Context, tools *Tools, cmds []string, ch
 		return failed + "\n\n" + msg
 	}
 	return msg
+}
+
+// formatCfg merges the global format settings with the ones of the repo.
+func (a *Agent) formatCfg(cwd string) FormatCfg {
+	f := FormatCfg{Format: map[string]string{}, SortImports: a.Cfg.SortImports}
+	for k, v := range a.Cfg.Format {
+		f.Format[k] = v
+	}
+	if r, ok := a.Cfg.Repos[repoName(cwd)]; ok {
+		for k, v := range r.Format {
+			f.Format[k] = v
+		}
+		if r.SortImports != nil {
+			f.SortImports = r.SortImports
+		}
+	}
+	return f
+}
+
+// format sorts imports and runs the configured formatters on the changed
+// files. Style rules then never cost the model a turn.
+func (a *Agent) format(ctx context.Context, tools *Tools, changed map[string]bool, st *Stats, emit func(Event)) {
+	if len(changed) == 0 {
+		return
+	}
+	cfg := a.formatCfg(tools.Cwd)
+	files := make([]string, 0, len(changed))
+	for f := range changed {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	if cfg.SortImports != nil && *cfg.SortImports {
+		var sorted []string
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				continue
+			}
+			if out := sortImports(f, string(b)); out != string(b) {
+				if os.WriteFile(f, []byte(out), 0o644) == nil {
+					rel, _ := filepath.Rel(tools.Cwd, f)
+					sorted = append(sorted, rel)
+				}
+			}
+		}
+		if len(sorted) > 0 {
+			emit(Event{T: "info", Text: "sorted the imports of " + strings.Join(sorted, ", ")})
+			st.Checks = append(st.Checks, "qh sorted the imports of: "+strings.Join(sorted, ", "))
+		}
+	}
+	byExt := map[string][]string{}
+	for _, f := range files {
+		if _, ok := cfg.Format[filepath.Ext(f)]; ok {
+			if _, err := os.Stat(f); err == nil {
+				byExt[filepath.Ext(f)] = append(byExt[filepath.Ext(f)], f)
+			}
+		}
+	}
+	exts := make([]string, 0, len(byExt))
+	for e := range byExt {
+		exts = append(exts, e)
+	}
+	sort.Strings(exts)
+	for _, e := range exts {
+		cmd := cfg.Format[e]
+		for _, f := range byExt[e] {
+			cmd += " '" + strings.ReplaceAll(f, "'", `'\''`) + "'"
+		}
+		emit(Event{T: "tool", Tool: "format", Text: fmt.Sprintf("%s (%d files)", cfg.Format[e], len(byExt[e]))})
+		args, _ := json.Marshal(map[string]any{"command": cmd, "timeout": 300})
+		out, ok := tools.Run(ctx, "bash", string(args))
+		emit(Event{T: "result", Tool: "format", OK: ok, Text: firstLine(out)})
+		state := "passed"
+		if !ok {
+			state = "FAILED"
+		}
+		st.Checks = append(st.Checks, fmt.Sprintf("qh format %s: %s on %d files", state, cfg.Format[e], len(byExt[e])))
+	}
+}
+
+// sortImports sorts the import block of a Kotlin or Java file. Kotlin uses
+// the IntelliJ layout (other packages, then java, javax and kotlin, then
+// aliases), Java puts the static imports last. ASCII order inside each group;
+// duplicates go. A block with comments in it stays as it is.
+func sortImports(path, src string) string {
+	kt := strings.HasSuffix(path, ".kt") || strings.HasSuffix(path, ".kts")
+	if !kt && !strings.HasSuffix(path, ".java") {
+		return src
+	}
+	lines := strings.Split(src, "\n")
+	first, last := -1, -1
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "import ") {
+			if first < 0 {
+				first = i
+			}
+			last = i
+			continue
+		}
+		if first >= 0 && t != "" {
+			break
+		}
+	}
+	if first < 0 {
+		return src
+	}
+	groups := make([][]string, 5)
+	seen := map[string]bool{}
+	for _, l := range lines[first : last+1] {
+		t := strings.TrimSpace(l)
+		if t == "" {
+			continue
+		}
+		if !strings.HasPrefix(t, "import ") || strings.Contains(t, "//") || strings.Contains(t, "/*") {
+			return src
+		}
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		name := importKey(t)
+		g := 0
+		switch {
+		case kt && strings.Contains(name, " as "):
+			g = 4
+		case kt && strings.HasPrefix(name, "java."):
+			g = 1
+		case kt && strings.HasPrefix(name, "javax."):
+			g = 2
+		case kt && strings.HasPrefix(name, "kotlin."):
+			g = 3
+		case !kt && strings.HasPrefix(strings.TrimPrefix(t, "import "), "static "):
+			g = 4
+		}
+		groups[g] = append(groups[g], t)
+	}
+	var block []string
+	for g, ls := range groups {
+		sort.Slice(ls, func(i, j int) bool { return importKey(ls[i]) < importKey(ls[j]) })
+		if !kt && g == 4 && len(ls) > 0 && len(block) > 0 {
+			block = append(block, "")
+		}
+		block = append(block, ls...)
+	}
+	out := append([]string{}, lines[:first]...)
+	out = append(out, block...)
+	out = append(out, lines[last+1:]...)
+	return strings.Join(out, "\n")
+}
+
+func importKey(l string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(l, "import "), "static "), ";")
 }
 
 // Kotlin operator and delegate names: an import of these is used without

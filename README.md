@@ -78,11 +78,16 @@ On a small test (one failing Python test, Qwen3.6-35B-A3B on an M3 Max), qh fixe
   "think_budget": 30000,
   "context": 262144,
   "compact_at": 0,
-  "warn_ignore": []
+  "warn_ignore": [],
+  "sort_imports": false,
+  "format": {".go": "gofmt -w"},
+  "repos": {"myrepo": {"sort_imports": true, "format": {".kt": "ktlint -F"}}}
 }
 ```
 
-An empty `model` means the first model the server lists. `compact_at` 0 means 80% of `context`. `warn_ignore` holds regular expressions for compiler warning lines that the "Done when" checks should not count. Only compiler warnings count (Kotlin `w:`, `file:line: warning:`, Maven compiler `[WARNING] File.java:[l,c]`); JVM notices such as `WARNING: sun.misc.Unsafe` do not. `QH_URL`, `QH_MODEL`, `QH_HOME` and `QH_SOCK` override the file.
+An empty `model` means the first model the server lists. `compact_at` 0 means 80% of `context`. `warn_ignore` holds regular expressions for compiler warning lines that the "Done when" checks should not count. Only compiler warnings count (Kotlin `w:`, `file:line: warning:`, Maven compiler `[WARNING] File.java:[l,c]`); JVM notices such as `WARNING: sun.misc.Unsafe` do not.
+
+After the model's final answer, qh can tidy the files the run wrote or edited, before the checks run. `sort_imports` sorts the imports of Kotlin files (IntelliJ layout: other packages, then `java`, `javax`, `kotlin`, then aliases) and Java files (static imports last). `format` maps a file extension to a command, and qh appends the changed files of that type. `repos` sets both for one repo, by the folder name of its git root. The report lists what qh changed. `QH_URL`, `QH_MODEL`, `QH_HOME` and `QH_SOCK` override the file.
 
 The system prompt is about 150 words. qh adds `~/.qh/AGENTS.md`, then `~/.qh/notes/REPO.md` (REPO is the folder name of the git repo that holds the working directory; a good place for API facts and repo notes that should not be committed), then `AGENTS.md` (or `CLAUDE.md` when a directory has no `AGENTS.md`) from `/` down to the working directory.
 
