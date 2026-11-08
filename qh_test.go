@@ -678,3 +678,23 @@ func TestRepoNotes(t *testing.T) {
 		t.Fatal("repo notes not loaded")
 	}
 }
+
+func TestGrepLineHintDidYouMean(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "common", "id"), 0o755)
+	os.WriteFile(filepath.Join(dir, "common", "id", "UuidV7.kt"), []byte("a\nx = 1\nb\nx = 1\n"), 0o644)
+	tl := &Tools{Cwd: dir}
+	ctx := context.Background()
+	if out, ok := tl.Run(ctx, "bash", `{"command":"grep nothing-here common/id/UuidV7.kt"}`); !ok || !strings.Contains(out, "no matches") {
+		t.Fatalf("grep: ok=%v %s", ok, out)
+	}
+	if out, ok := tl.Run(ctx, "bash", `{"command":"exit 1"}`); ok {
+		t.Fatalf("plain exit 1 must fail: %s", out)
+	}
+	if out, ok := tl.Run(ctx, "edit", `{"path":"common/id/UuidV7.kt","old":"x = 1","new":"x = 2","line":4}`); !ok || !strings.Contains(out, "line 4") {
+		t.Fatalf("line hint: %s", out)
+	}
+	if out, _ := tl.Run(ctx, "read", `{"path":"auth/id/UuidV7.kt"}`); !strings.Contains(out, "did you mean: common/id/UuidV7.kt") {
+		t.Fatalf("did you mean: %s", out)
+	}
+}

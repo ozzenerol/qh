@@ -136,7 +136,13 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 			return e, false
 		}
 		p, _ := s("path")
-		return t.read(t.path(p), n("offset", 1), n("limit", readDefault))
+		out, ok := t.read(t.path(p), n("offset", 1), n("limit", readDefault))
+		if !ok && strings.Contains(out, "no such file") {
+			if m := t.findByName(filepath.Base(p)); len(m) > 0 {
+				out += "\ndid you mean: " + strings.Join(m, ", ")
+			}
+		}
+		return out, ok
 	case "write":
 		if e := need("path", "content"); e != "" {
 			return e, false
@@ -186,7 +192,7 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		}
 		nw, _ := s("new")
 		all := args["all"] == true || args["all"] == "true"
-		out, ok := t.edit(t.path(p), p, o, nw, all)
+		out, ok := t.edit(t.path(p), p, o, nw, all, n("line", 0))
 		return note + out, ok
 	case "bash":
 		if e := need("command"); e != "" {
@@ -329,7 +335,7 @@ func lineDiff(a, b string) (add, del int) {
 	return add, del
 }
 
-func (t *Tools) edit(fp, shown, old, nw string, all bool) (string, bool) {
+func (t *Tools) edit(fp, shown, old, nw string, all bool, near int) (string, bool) {
 	b, err := os.ReadFile(fp)
 	if err != nil {
 		return "error: " + err.Error(), false
@@ -348,15 +354,31 @@ func (t *Tools) edit(fp, shown, old, nw string, all bool) (string, bool) {
 	switch {
 	case cnt == 0:
 		return "error: old text not found in " + shown + ". " + nearest(src, old), false
-	case cnt > 1 && !all:
-		return fmt.Sprintf("error: old text appears %d times in %s (lines %s). Add more lines around it so it is unique, or set all=true.",
+	case cnt > 1 && !all && near <= 0:
+		return fmt.Sprintf("error: old text appears %d times in %s (lines %s). Add more lines around it so it is unique, pass line=N with the line of the one to change, or set all=true.",
 			cnt, shown, lineNums(src, old)), false
 	}
-	line := strings.Count(src[:strings.Index(src, old)], "\n") + 1
+	at := strings.Index(src, old)
+	if cnt > 1 && !all {
+		// line picks the match that starts closest to it.
+		bestD := -1
+		for off := 0; ; {
+			i := strings.Index(src[off:], old)
+			if i < 0 {
+				break
+			}
+			l := strings.Count(src[:off+i], "\n") + 1
+			if d := max(l-near, near-l); bestD < 0 || d < bestD {
+				at, bestD = off+i, d
+			}
+			off += i + len(old)
+		}
+	}
+	line := strings.Count(src[:at], "\n") + 1
 	if all {
 		src = strings.ReplaceAll(src, old, nw)
 	} else {
-		src = strings.Replace(src, old, nw, 1)
+		src = src[:at] + nw + src[at+len(old):]
 	}
 	if err := os.WriteFile(fp, []byte(src), 0o644); err != nil {
 		return "error: " + err.Error(), false
@@ -479,6 +501,38 @@ func nearest(src, old string) string {
 	return b.String()
 }
 
+// findByName lists up to 5 project files with the given base name.
+func (t *Tools) findByName(base string) []string {
+	var out []string
+	cmd := exec.Command("git", "ls-files", "-co", "--exclude-standard")
+	cmd.Dir = t.Cwd
+	if b, err := cmd.Output(); err == nil {
+		for _, f := range strings.Split(string(b), "\n") {
+			if filepath.Base(f) == base {
+				out = append(out, f)
+			}
+		}
+	} else {
+		filepath.WalkDir(t.Cwd, func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "build" || d.Name() == "target") {
+				return filepath.SkipDir
+			}
+			if d.Name() == base && !d.IsDir() {
+				rel, _ := filepath.Rel(t.Cwd, p)
+				out = append(out, rel)
+			}
+			return nil
+		})
+	}
+	if len(out) > 5 {
+		out = out[:5]
+	}
+	return out
+}
+
 // filesWith lists the files under the working directory that contain old.
 func (t *Tools) filesWith(ctx context.Context, old string) []string {
 	var cands []string
@@ -574,6 +628,10 @@ func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration)
 	if strings.TrimSpace(res) == "" {
 		res = "(no output)"
 	}
+	// grep and rg exit 1 when nothing matches; that is an answer, not an error.
+	if code == 1 && strings.TrimSpace(out.String()) == "" && searchCmd.MatchString(command) {
+		return "no matches [exit 1]", true
+	}
 	// A test command piped into tail exits 0 even when tests fail, so test
 	// commands get the report check whatever their exit code.
 	if code != 0 || testCmd.MatchString(command) {
@@ -593,6 +651,8 @@ func clip(s string) string {
 	cut := strings.Count(s[head:len(s)-tail], "\n")
 	return s[:head] + fmt.Sprintf("\n...[%d lines cut; filter the output with grep, head or tail]...\n", cut) + s[len(s)-tail:]
 }
+
+var searchCmd = regexp.MustCompile(`(^|[|;&]\s*|\s)(grep|egrep|fgrep|rg|ag|ack)\s`)
 
 var testCmd = regexp.MustCompile(`(?i)\b(test|tests|check|verify|gradlew?|mvnw?|integrationTest)\b`)
 
