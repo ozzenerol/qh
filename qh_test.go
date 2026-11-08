@@ -664,3 +664,17 @@ class A(val at: Instant) {
 		t.Fatal("go files are the compiler's job")
 	}
 }
+
+func TestRepoNotes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("QH_HOME", home)
+	repo := filepath.Join(t.TempDir(), "myrepo")
+	sub := filepath.Join(repo, "svc")
+	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	os.MkdirAll(sub, 0o755)
+	os.MkdirAll(filepath.Join(home, "notes"), 0o755)
+	os.WriteFile(filepath.Join(home, "notes", "myrepo.md"), []byte("JdbcClient: sql(...).param(...)"), 0o644)
+	if !strings.Contains(buildSystem(sub, false), "JdbcClient: sql") {
+		t.Fatal("repo notes not loaded")
+	}
+}

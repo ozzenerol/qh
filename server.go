@@ -324,6 +324,8 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 	defer ss.mu.Unlock()
 	ss.setCancel(cancel)
 	defer ss.setCancel(nil)
+	ss.setFrom(req.From)
+	defer ss.setFrom("")
 	if req.New {
 		ss.Msgs = nil
 	}
@@ -485,6 +487,7 @@ type SessionInfo struct {
 	Running bool      `json:"running"`
 	Step    int       `json:"step"`
 	Waiting bool      `json:"waiting"`
+	From    string    `json:"from,omitempty"` // who started the run in progress
 	Cwd     string    `json:"cwd"`
 	First   string    `json:"first"` // the first user message
 	Last    string    `json:"last"`  // the last user message
@@ -511,6 +514,7 @@ func (s *Server) sessionList() []SessionInfo {
 		if live, ok := s.sessions[r.Name]; ok {
 			r.Running, r.Step = live.state()
 			r.Waiting = live.waitingNow()
+			r.From = live.fromNow()
 		}
 		s.mu.Unlock()
 		for _, m := range ss.Msgs {
@@ -538,6 +542,13 @@ func (s *Server) listSessions(emit func(Event)) {
 			state = fmt.Sprintf("  RUNNING step %d", r.Step)
 			if r.Waiting {
 				state = fmt.Sprintf("  WAITING for the model (step %d)", r.Step)
+			}
+			from := r.From
+			if strings.HasPrefix(from, "chat:") {
+				from = "a terminal chat"
+			}
+			if from != "" {
+				state += " from " + from
 			}
 		}
 		ctx := "ctx " + human(r.Ctx)

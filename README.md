@@ -55,7 +55,7 @@ The chat shows every run on its session, from any client. The session name `@cha
 
 In the chat, Enter sends and Ctrl+J starts a new line (pasted text keeps its lines). Up and Down walk the history, Ctrl+T shows the thinking, and Ctrl+C twice quits. Type `/` for the command menu (`/new`, `/resume`, `/think on|off`, `/sessions`, `/clear`, `/exit`); ↑↓ picks one, Tab completes, Enter runs it. Without a terminal (a pipe, or `TERM=dumb`) qh uses a plain line chat.
 
-Sessions are saved in `~/.qh/sessions/NAME.json` after each step, so they survive a daemon restart. `qh sessions` lists them with the number of turns, the context size, and `RUNNING step N` for a run in progress (`WAITING for the model` while another session's run has the model). A chat started with plain `qh` gets a new session named after the time (`1108-013105`); `qh run` uses `main` unless you give `-s`.
+Sessions are saved in `~/.qh/sessions/NAME.json` after each step, so they survive a daemon restart. `qh sessions` lists them with the number of turns, the context size, and `RUNNING step N` for a run in progress (`WAITING for the model` while another session's run has the model), and who started it (`from opus`, `from qh run`, `from a terminal chat`). A chat started with plain `qh` gets a new session named after the time (`1108-013105`); `qh run` uses `main` unless you give `-s`.
 
 ## Compaction
 
@@ -83,7 +83,7 @@ On a small test (one failing Python test, Qwen3.6-35B-A3B on an M3 Max), qh fixe
 
 An empty `model` means the first model the server lists. `compact_at` 0 means 80% of `context`. `QH_URL`, `QH_MODEL`, `QH_HOME` and `QH_SOCK` override the file.
 
-The system prompt is about 150 words. qh adds `~/.qh/AGENTS.md`, then `AGENTS.md` (or `CLAUDE.md` when a directory has no `AGENTS.md`) from `/` down to the working directory.
+The system prompt is about 150 words. qh adds `~/.qh/AGENTS.md`, then `~/.qh/notes/REPO.md` (REPO is the folder name of the git repo that holds the working directory; a good place for API facts and repo notes that should not be committed), then `AGENTS.md` (or `CLAUDE.md` when a directory has no `AGENTS.md`) from `/` down to the working directory.
 
 ## Tests
 

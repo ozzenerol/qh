@@ -28,9 +28,22 @@ type Session struct {
 	wmu      sync.Mutex // guards watchers and cancel
 	watchers map[chan Event]struct{}
 	cancel   context.CancelFunc
-	running  bool // a run holds mu
-	step     int  // its step
-	waiting  bool // the run waits for the model (another session uses it)
+	running  bool   // a run holds mu
+	step     int    // its step
+	waiting  bool   // the run waits for the model (another session uses it)
+	from     string // who started the run
+}
+
+func (s *Session) setFrom(f string) {
+	s.wmu.Lock()
+	s.from = f
+	s.wmu.Unlock()
+}
+
+func (s *Session) fromNow() string {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return s.from
 }
 
 func (s *Session) setWaiting(w bool) {
@@ -234,13 +247,25 @@ func buildSystem(cwd string, readOnly bool) string {
 	return s
 }
 
-// contextFiles returns ~/.qh/AGENTS.md, then AGENTS.md (or CLAUDE.md) from
-// the top directory down to cwd.
+// contextFiles returns ~/.qh/AGENTS.md, ~/.qh/notes/REPO.md (REPO is the
+// name of the git repo that holds cwd), then AGENTS.md (or CLAUDE.md) from the
+// top directory down to cwd.
 func contextFiles(cwd string) []string {
 	var out []string
 	if d, err := qhDir(); err == nil {
 		if p := filepath.Join(d, "AGENTS.md"); exists(p) {
 			out = append(out, p)
+		}
+		for r := cwd; ; r = filepath.Dir(r) {
+			if _, err := os.Stat(filepath.Join(r, ".git")); err == nil {
+				if p := filepath.Join(d, "notes", filepath.Base(r)+".md"); exists(p) {
+					out = append(out, p)
+				}
+				break
+			}
+			if r == filepath.Dir(r) {
+				break
+			}
 		}
 	}
 	var dirs []string
