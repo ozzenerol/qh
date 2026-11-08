@@ -69,6 +69,7 @@ type Tools struct {
 	DiagTimeout time.Duration        // per check
 	Seen        map[string]*fileSeen // path -> what qh last showed the model of it
 	BG          *BG                  // background commands of the run; nil means none allowed
+	Undo        *Checkpoint          // the files this run changed, for qh undo; nil keeps nothing
 }
 
 func (t *Tools) path(p string) string {
@@ -259,6 +260,8 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		}
 		before := t.mtimes()
 		defer t.refreshChanged(before)
+		snap := t.Undo.bashBefore()
+		defer t.Undo.bashAfter(snap)
 		return t.bash(ctx, c, time.Duration(to)*time.Second)
 	case "bg":
 		if t.BG == nil {
@@ -346,6 +349,7 @@ func (t *Tools) write(fp, shown, c string) (string, bool) {
 		return e, false
 	}
 	prev, hadFile := os.ReadFile(fp)
+	t.Undo.keep(fp)
 	if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
 		return "error: " + err.Error(), false
 	}
@@ -432,6 +436,7 @@ func (t *Tools) edit(fp, shown, old, nw string, all bool, near int) (string, boo
 	} else {
 		src = src[:at] + nw + src[at+len(old):]
 	}
+	t.Undo.keep(fp)
 	if err := os.WriteFile(fp, []byte(src), 0o644); err != nil {
 		return "error: " + err.Error(), false
 	}

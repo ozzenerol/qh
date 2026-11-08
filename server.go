@@ -253,6 +253,7 @@ func (s *Server) handle(c net.Conn) {
 			return
 		}
 		ss.Msgs, ss.Todo = nil, nil
+		clear(ss.seen)
 		if req.Cwd != "" {
 			ss.Cwd = req.Cwd
 		}
@@ -355,6 +356,7 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 	defer ss.setFrom("")
 	if req.New {
 		ss.Msgs, ss.Todo = nil, nil
+		clear(ss.seen)
 	}
 	if !req.Compact {
 		ss.Cwd = req.Cwd
@@ -371,6 +373,7 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 		return
 	}
 	a := &Agent{LLM: llm, Cfg: s.cfg, Gate: s.gate, Save: func() { s.save(ss) }, Wait: ss.setWaiting}
+	a.UndoDir = undoRoot(ss.Name)
 	if req.Compact {
 		if err := a.Compact(ctx, ss, req.Prompt, all); err != nil {
 			all(Event{T: "error", Text: err.Error()})

@@ -83,6 +83,7 @@ func (a *Agent) Compact(ctx context.Context, s *Session, focus string, emit func
 	}
 	s.LastPrompt = 0
 	s.System = "" // the cache is gone, so the next request may pick up new AGENTS.md and notes
+	clear(s.seen) // the summary does not show the files, so a write needs a new read
 	after := estimateTokens(append([]Message{{Content: s.systemPrompt(a.systemExtra(s.ReadOnly))}}, s.Msgs...))
 	emit(Event{T: "compacted", Text: summary, Before: before, After: after})
 	return nil

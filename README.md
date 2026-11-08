@@ -52,6 +52,7 @@ qh compact -s lexer "keep the test names"
 qh wait -s lexer  # block until the run on lexer ends, then print its report
 qh sessions
 qh reset -s lexer
+qh undo -s lexer  # put back the files the last run on lexer changed
 qh stop
 ```
 
@@ -62,6 +63,12 @@ The chat shows every run on its session, from any client. The session name `@cha
 In the chat, Enter sends and Ctrl+J starts a new line (pasted text keeps its lines). Up and Down walk the history, Ctrl+T shows the thinking, and Ctrl+C twice quits. Type `/` for the command menu (`/new`, `/resume`, `/think on|off`, `/sessions`, `/clear`, `/exit`); ↑↓ picks one, Tab completes, Enter runs it. Without a terminal (a pipe, or `TERM=dumb`) qh uses a plain line chat.
 
 Sessions are saved in `~/.qh/sessions/NAME.json` after each step, so they survive a daemon restart. `qh sessions` lists them with the number of turns, the context size, and `RUNNING step N` for a run in progress (`WAITING for the model` while another session's run has the model), and who started it (`from opus`, `from qh run`, `from a terminal chat`). A chat started with plain `qh` gets a new session named after the time (`1108-013105`); `qh run` uses `main` unless you give `-s`.
+
+## Undo
+
+Before a run first changes a file with write or edit, qh copies the file (or notes that it did not exist) to `~/.qh/sessions/NAME.undo/RUN/`. Only touched files are kept, files over 2 MB are listed but not copied, and each session keeps its last 5 runs that changed something. In a git repo, bash commands are covered too: qh runs `git status` before and after each call (2 to 17 ms in repos of 20 to 546 files) and keeps the files the call changed, from `git show HEAD:path` when the file was clean before, from a copy taken before the call when it was already dirty, and as "did not exist" when it is new and untracked. Outside a git repo only write and edit are covered. Read-only runs keep nothing.
+
+`qh undo -s NAME` restores every file of the newest run on that session, deletes the files it created, prints the list, and drops that checkpoint, so the next `qh undo` goes one run further back. It refuses, and names the files, when one changed after the run ended, or when the run has not finished; `-force` restores anyway. `qh undo -s NAME -list` shows the runs it can undo, newest first. The session's messages stay as they are. A reset or a compaction makes qh forget which files the model has read, so a write needs a new read after them.
 
 ## Compaction
 
