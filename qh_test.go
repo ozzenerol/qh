@@ -1172,3 +1172,10 @@ func TestGlobSkipsHidden(t *testing.T) {
 		t.Fatal("inside hidden root: " + out)
 	}
 }
+
+func TestRmTargets(t *testing.T) {
+	got := rmTargets("rm -rf .gradle/configuration-cache && ./gradlew test; rm a.txt; rm -r -f build out")
+	if strings.Join(got, ",") != ".gradle/configuration-cache,build,out" {
+		t.Fatalf("%q", got)
+	}
+}

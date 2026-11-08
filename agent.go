@@ -127,6 +127,7 @@ type Stats struct {
 	Retries      int            `json:"retries"`
 	Window       int            `json:"window"`
 	ToolErrs     int            `json:"tool_errors"`
+	Removes      int            `json:"removes,omitempty"`       // rm -r targets in bash commands
 	CmdFails     int            `json:"failed_commands"`         // commands that ran and exited non-zero (failing builds and tests); not in ToolErrs
 	Limit        bool           `json:"step_limit,omitempty"`    // the run stopped at max_steps
 	Checks       []string       `json:"checks,omitempty"`        // results of the "Done when" commands
@@ -469,8 +470,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	lastErrs := ""             // the compiler errors of the last failed build
 	blocked := 0               // library commands blocked after the second nudge
 	reactiveTold := false
-	testEdits := 0   // writes and edits to test files since the last main-code change
-	fixTurn := false // the model got one turn to fix failed checks
+	removed := map[string]int{} // rm -r targets of bash commands in this run
+	testEdits := 0              // writes and edits to test files since the last main-code change
+	fixTurn := false            // the model got one turn to fix failed checks
 	wantClean := noWarnings.MatchString(prompt)
 	todoDue := false // remind the model of its open todo items after the next tool call
 	defer s.setState(false, 0)
@@ -594,6 +596,17 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 					e = e[:j]
 				}
 				lastErrs = e
+			}
+			if tc.Function.Name == "bash" {
+				var ba struct{ Command string }
+				json.Unmarshal([]byte(tc.Function.Arguments), &ba)
+				for _, t := range rmTargets(ba.Command) {
+					st.Removes++
+					if removed[t]++; removed[t] == 3 {
+						out += "\n\n[qh: that is the third time you deleted " + t + ". Deleting caches or build output rarely fixes a build; read the error and fix the code or the config it names.]"
+						emit(Event{T: "info", Text: "repeated rm -r of " + t})
+					}
+				}
 			}
 			if !reactiveTold && strings.Contains(out, "[qh: failing tests from the JUnit XML reports]") && usesReactor(changed) {
 				reactiveTold = true
@@ -1302,6 +1315,20 @@ func rerunCmd(c string) string {
 		return c + " --rerun-tasks"
 	}
 	return c
+}
+
+var rmRe = regexp.MustCompile(`(?:^|[;&|]\s*|\s)rm\s+((?:-[a-zA-Z]+\s+)+)([^;&|]+)`)
+
+// rmTargets lists what a command deletes with rm -r.
+func rmTargets(cmd string) []string {
+	var out []string
+	for _, m := range rmRe.FindAllStringSubmatch(cmd, -1) {
+		if !strings.ContainsAny(m[1], "rR") {
+			continue
+		}
+		out = append(out, strings.Fields(m[2])...)
+	}
+	return out
 }
 
 // isTestPath is true for files named like tests or kept under a test folder.
