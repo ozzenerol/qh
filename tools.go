@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -481,6 +482,7 @@ func lineNums(src, sub string) string {
 func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration) (string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	start := time.Now().Add(-time.Second)
 	cmd := exec.Command("bash", "-c", command)
 	cmd.Dir = t.Cwd
 	cmd.Stdin = nil
@@ -514,6 +516,11 @@ func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration)
 	if strings.TrimSpace(res) == "" {
 		res = "(no output)"
 	}
+	if code != 0 {
+		if f := junitFailures(t.Cwd, start); f != "" {
+			res = strings.TrimRight(res, "\n") + "\n\n[qh: failing tests from the JUnit XML reports]\n" + f
+		}
+	}
 	return fmt.Sprintf("%s\n[exit %d]", strings.TrimRight(res, "\n"), code), code == 0
 }
 
@@ -525,4 +532,96 @@ func clip(s string) string {
 	head, tail := maxToolOut/3, maxToolOut*2/3
 	cut := strings.Count(s[head:len(s)-tail], "\n")
 	return s[:head] + fmt.Sprintf("\n...[%d lines cut; filter the output with grep, head or tail]...\n", cut) + s[len(s)-tail:]
+}
+
+type junitCase struct {
+	Name    string `xml:"name,attr"`
+	Class   string `xml:"classname,attr"`
+	Failure *struct {
+		Message string `xml:"message,attr"`
+		Text    string `xml:",chardata"`
+	} `xml:"failure"`
+	Error *struct {
+		Message string `xml:"message,attr"`
+		Text    string `xml:",chardata"`
+	} `xml:"error"`
+}
+
+// junitFailures reads the JUnit XML reports (Gradle test-results, Maven
+// surefire and failsafe) written since start and lists the failing tests with
+// their message and the top of the stack. The model then does not need to
+// dig in build/ for them.
+func junitFailures(root string, start time.Time) string {
+	var files []string
+	seen := 0
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if seen++; seen > 200000 {
+			return filepath.SkipAll
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", ".gradle", ".idea", "classes", "kotlin", "tmp", "libs":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".xml") || !(strings.Contains(p, "test-results") || strings.Contains(p, "surefire-reports") || strings.Contains(p, "failsafe-reports")) {
+			return nil
+		}
+		if info, err := d.Info(); err == nil && info.ModTime().After(start) {
+			files = append(files, p)
+		}
+		return nil
+	})
+	var b strings.Builder
+	n := 0
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		dec := xml.NewDecoder(bytes.NewReader(data))
+		for {
+			tok, err := dec.Token()
+			if err != nil {
+				break
+			}
+			se, ok := tok.(xml.StartElement)
+			if !ok || se.Name.Local != "testcase" {
+				continue
+			}
+			var c junitCase
+			if dec.DecodeElement(&c, &se) != nil {
+				continue
+			}
+			msg, text := "", ""
+			if c.Failure != nil {
+				msg, text = c.Failure.Message, c.Failure.Text
+			} else if c.Error != nil {
+				msg, text = c.Error.Message, c.Error.Text
+			} else {
+				continue
+			}
+			n++
+			if n > 10 {
+				continue
+			}
+			fmt.Fprintf(&b, "FAILED %s.%s: %s\n", c.Class, c.Name, oneLine(msg, 300))
+			lines := strings.Split(strings.TrimSpace(text), "\n")
+			shown := 0
+			for _, l := range lines[min(1, len(lines)):] {
+				if l = strings.TrimSpace(l); strings.HasPrefix(l, "at ") && shown < 4 {
+					b.WriteString("    " + l + "\n")
+					shown++
+				}
+			}
+		}
+	}
+	if n > 10 {
+		fmt.Fprintf(&b, "... and %d more failing tests\n", n-10)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

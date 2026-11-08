@@ -81,7 +81,8 @@ type Stats struct {
 	Retries  int      `json:"retries"`
 	Window   int      `json:"window"`
 	ToolErrs int      `json:"tool_errors"`
-	Checks   []string `json:"checks,omitempty"` // results of the "Done when" commands
+	Limit    bool     `json:"step_limit,omitempty"` // the run stopped at max_steps
+	Checks   []string `json:"checks,omitempty"`     // results of the "Done when" commands
 }
 
 type Event struct {
@@ -264,6 +265,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})
 	seen := map[string]int{}
 	told := false
+	ended := false // the model gave its final answer
 	selfChecked := doneWhen(prompt) == ""
 	checks := checkCommands(prompt)
 	checked := s.ReadOnly || len(checks) == 0
@@ -343,6 +345,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 					continue
 				}
 			}
+			ended = true
 			break
 		}
 		for _, tc := range msg.ToolCalls {
@@ -370,6 +373,10 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			emit(Event{T: "info", Text: "interrupted"})
 			break
 		}
+		if left := a.Cfg.MaxSteps - st.Steps; left == 5 {
+			last := &s.Msgs[len(s.Msgs)-1]
+			last.Content += "\n\n[qh: 5 steps left before the step limit. Finish the work, run the check, and write the final report.]"
+		}
 		if s.LastPrompt > a.compactAt() {
 			if err := a.Compact(ctx, s, "the task that is in progress now", emit); err != nil {
 				emit(Event{T: "error", Text: "compaction failed: " + err.Error()})
@@ -379,11 +386,13 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				Content: "Continue the task from the summary. Check the files before you change them again."})
 		}
 	}
-	if !checked && ctx.Err() == nil && st.Steps < a.Cfg.MaxSteps {
-		a.runChecks(ctx, tools, checks, &st, emit)
-	}
-	if st.Steps >= a.Cfg.MaxSteps {
-		emit(Event{T: "info", Text: fmt.Sprintf("stopped at the step limit (%d)", a.Cfg.MaxSteps)})
+	if !ended && st.Steps >= a.Cfg.MaxSteps && ctx.Err() == nil {
+		st.Limit = true
+		emit(Event{T: "info", Text: fmt.Sprintf("stopped at the step limit (%d); asking for the report", a.Cfg.MaxSteps)})
+		a.limitReport(ctx, s, system, schemas, emit, &told)
+		if !checked {
+			a.runChecks(ctx, tools, checks, &st, emit)
+		}
 	}
 	st.Secs = time.Since(t0).Seconds()
 	return st
@@ -500,4 +509,28 @@ func failLine(s string) string {
 		}
 	}
 	return strings.TrimSpace(exit)
+}
+
+const limitAsk = `You reached the step limit, and the tools are off now. Write the final report: what is done, what is not done, the files you changed, and the last test result you saw.`
+
+// limitReport asks for a report without tools after the step limit, so the
+// run still ends with one.
+func (a *Agent) limitReport(ctx context.Context, s *Session, system Message, schemas []map[string]any, emit func(Event), told *bool) {
+	s.Msgs = append(s.Msgs, Message{Role: "user", From: "qh", Content: limitAsk})
+	msg, _, err := a.chat(ctx, Request{Messages: append([]Message{system}, s.Msgs...), Tools: schemas, Think: false, MaxTok: a.Cfg.MaxTokens},
+		func(d Delta) bool {
+			if d.Text != "" {
+				emit(Event{T: "text", Text: d.Text})
+			}
+			return true
+		}, emit, told)
+	if err != nil {
+		emit(Event{T: "error", Text: err.Error()})
+		return
+	}
+	msg.ToolCalls = nil // calls without results would break the next request
+	if strings.TrimSpace(msg.Content) == "" {
+		msg.Content = "(no report: the run stopped at the step limit)"
+	}
+	s.Msgs = append(s.Msgs, msg)
 }

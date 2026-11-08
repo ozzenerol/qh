@@ -45,6 +45,8 @@ run flags:
   -from name  label that an open chat on the session shows (default $QH_FROM or "qh run")
   -q          print only the report
 
+qh run exits with 4 when the run stops at the step limit, and 124 at -timeout.
+
 The daemon listens on ~/.qh/qh.sock and starts on the first call.
 Settings are in ~/.qh/config.json: url, model, max_steps, max_tokens, think_budget.
 `
@@ -343,6 +345,10 @@ func runCmd(args []string) error {
 	fmt.Println(e.Text)
 	if !*quiet {
 		fmt.Fprintln(os.Stderr, v.dim(statLine(e.Stats)))
+	}
+	if e.Stats != nil && e.Stats.Limit {
+		fmt.Fprintln(os.Stderr, "qh: the run stopped at the step limit; the task may not be finished")
+		os.Exit(4)
 	}
 	return nil
 }

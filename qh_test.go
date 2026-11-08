@@ -548,3 +548,50 @@ func TestFailLine(t *testing.T) {
 		t.Fatalf("failLine: %q", got)
 	}
 }
+
+func TestJUnitFailures(t *testing.T) {
+	dir := t.TempDir()
+	rep := filepath.Join(dir, "svc", "build", "test-results", "test")
+	os.MkdirAll(rep, 0o755)
+	tl := &Tools{Cwd: dir}
+	xmlText := `<?xml version="1.0"?><testsuite name="FooTest"><testcase name="ok" classname="a.FooTest"/>` +
+		`<testcase name="bad" classname="a.FooTest"><failure message="expected 1 but was 2">org.opentest4j.AssertionFailedError: expected 1 but was 2
+	at a.FooTest.bad(FooTest.kt:12)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)</failure></testcase></testsuite>`
+	cmd := fmt.Sprintf("cat > %s/TEST-a.FooTest.xml <<'X'\n%s\nX\nexit 1", rep, xmlText)
+	args, _ := json.Marshal(map[string]any{"command": cmd})
+	out, ok := tl.Run(context.Background(), "bash", string(args))
+	if ok || !strings.Contains(out, "FAILED a.FooTest.bad: expected 1 but was 2") || !strings.Contains(out, "FooTest.kt:12") || strings.Contains(out, "a.FooTest.ok") {
+		t.Fatalf("junit: %s", out)
+	}
+}
+
+func TestStepLimit(t *testing.T) {
+	dir := t.TempDir()
+	n := 0
+	var last []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []Message `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		last = append(last, body.Messages[len(body.Messages)-1].Content)
+		n++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if n <= 6 {
+			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c%d\",\"function\":{\"name\":\"bash\",\"arguments\":\"{\\\"command\\\":\\\"echo %d\\\"}\"}}]}}]}\n\ndata: [DONE]\n\n", n, n)
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial report\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	a := &Agent{LLM: &LLM{BaseURL: srv.URL, Model: "m", HTTP: srv.Client()}, Cfg: Config{MaxSteps: 6, MaxTokens: 100, ThinkBudget: 30000}}
+	s := &Session{Name: "t", Cwd: dir}
+	st := a.Run(context.Background(), s, "loop", "", func(Event) {})
+	if !st.Limit || n != 7 || !strings.Contains(last[6], "step limit") || !strings.Contains(last[1], "5 steps left") {
+		t.Fatalf("limit=%v n=%d last=%q", st.Limit, n, last)
+	}
+	if m := s.Msgs[len(s.Msgs)-1]; m.Content != "partial report" || len(m.ToolCalls) != 0 {
+		t.Fatalf("report: %+v", m)
+	}
+}
