@@ -60,6 +60,7 @@ func toolSchemas(readOnly bool) []map[string]any {
 		fn("glob", "Find files by path pattern, like src/**/*Test.kt. Returns at most 200 paths.",
 			map[string]any{"pattern": str("glob pattern; ** matches any directories"), "path": str("directory, default .")}, "pattern"),
 		todoSchema(),
+		lookupSchema(),
 	}
 }
 
@@ -287,6 +288,12 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		snap := t.Undo.bashBefore()
 		defer t.Undo.bashAfter(snap)
 		return t.bash(ctx, c, time.Duration(to)*time.Second)
+	case "lookup":
+		if e := need("name"); e != "" {
+			return e, false
+		}
+		nm, _ := s("name")
+		return t.lookup(ctx, nm)
 	case "bg":
 		if t.BG == nil {
 			return "error: background commands are not available here", false

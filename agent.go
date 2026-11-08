@@ -277,12 +277,13 @@ func checkSpans(prompt string) (cmds, skipped []string) {
 	return out, skipped
 }
 
-const systemPrompt = `You are a coding agent. You work in %s on %s. Your tools are read, write, edit, bash, bg, grep, glob and todo.
+const systemPrompt = `You are a coding agent. You work in %s on %s. Your tools are read, write, edit, bash, bg, grep, glob, todo and lookup.
 
 For a task with 3 or more steps, write a todo list first and keep it current.
 Work in small steps. Read the code before you change it. After each change, build or run the tests and read the result.
 Search code with grep and find files with glob. Use bash for git, builds and tests; filter long output with head or tail.
 For a server or watcher, use bash with background: true and read its output with bg.
+To check that a library has a class or top-level function and how to import it, use lookup.
 To check a library API, print its signatures (javap -cp JAR CLASS, go doc PKG.NAME, python -c "help(...)") instead of unpacking its sources.
 Use edit for small changes and write for new files. In edit, copy old exactly from the file and leave out the line numbers.
 Do not ask for permission. Do the task.
@@ -569,7 +570,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			var out string
 			var ok bool
 			if nudges >= 2 && tc.Function.Name == "bash" && libDig.MatchString(tc.Function.Arguments) {
-				out = "error: qh blocks digging in library jars and caches for the rest of this run. Write the code and compile it; the compiler names any class or method that is missing."
+				out = "error: qh blocks digging in library jars and caches for the rest of this run. Use lookup NAME to check a class or function name and its import, then write the code and compile it."
 				if blocked++; blocked >= 2 && lastErrs != "" {
 					out += "\n\n[qh: the last build failed with:\n" + lastErrs + "\nFix this line in your own file. Do not look for the answer in the library.]"
 				}
@@ -632,10 +633,10 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 					nudges++
 					if lastErrs != "" {
 						out += "\n\n[qh: stop exploring the library. The build failed with these errors:\n" + lastErrs +
-							"\nRead the line each error points to and fix it there.]"
+							"\nRead the line each error points to and fix it there. For a name the compiler cannot find, call lookup with it.]"
 						emit(Event{T: "info", Text: "library digging: pointing the model back at the compiler errors"})
 					} else {
-						out += "\n\n[qh: stop exploring the library. Write the code and compile it; the compiler will tell you if a class or method is missing.]"
+						out += "\n\n[qh: stop exploring the library. Use lookup to check a class or function name and its import, then write the code and compile it.]"
 						emit(Event{T: "info", Text: "library digging: telling the model to compile instead"})
 					}
 					if nudges == 2 {
