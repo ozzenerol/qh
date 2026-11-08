@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -296,8 +298,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	ended := false // the model gave its final answer
 	selfChecked := doneWhen(prompt) == ""
 	checks := checkCommands(prompt)
-	checked := s.ReadOnly || len(checks) == 0
-	fixTurn := false // the model got one turn to fix failed checks
+	checked := s.ReadOnly
+	changed := map[string]bool{} // files that write and edit changed in this run
+	fixTurn := false             // the model got one turn to fix failed checks
 	wantClean := noWarnings.MatchString(prompt)
 	defer s.setState(false, 0)
 
@@ -370,7 +373,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			if !checked {
 				// The checks run after the report, and once more after a fix
 				// turn, so the check lines describe the code as it ends.
-				failed := a.runChecks(ctx, tools, checks, wantClean, &st, emit)
+				failed := a.finalChecks(ctx, tools, checks, changed, wantClean, &st, emit)
 				if failed != "" && !fixTurn {
 					fixTurn = true
 					s.Msgs = append(s.Msgs, Message{Role: "user", From: "qh", Content: failed})
@@ -391,6 +394,12 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			}
 			if !ok {
 				st.ToolErrs++
+			} else if tc.Function.Name == "write" || tc.Function.Name == "edit" {
+				var pa struct{ Path, File_path string }
+				json.Unmarshal([]byte(tc.Function.Arguments), &pa)
+				if p := cmp.Or(pa.Path, pa.File_path); p != "" {
+					changed[tools.path(p)] = true
+				}
 			}
 			summary := firstLine(out)
 			if !ok {
@@ -424,7 +433,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		emit(Event{T: "info", Text: fmt.Sprintf("stopped at the step limit (%d); asking for the report", a.Cfg.MaxSteps)})
 		a.limitReport(ctx, s, system, schemas, emit, &told)
 		if !checked {
-			a.runChecks(ctx, tools, checks, wantClean, &st, emit)
+			a.finalChecks(ctx, tools, checks, changed, wantClean, &st, emit)
 		}
 	}
 	st.Secs = time.Since(t0).Seconds()
@@ -486,6 +495,95 @@ func firstLine(s string) string {
 		return last
 	}
 	return oneLine(lines[0], 120)
+}
+
+// finalChecks runs the "Done when" commands and looks for unused imports in
+// the changed files. It returns a message for the model when something
+// should be fixed, or "".
+func (a *Agent) finalChecks(ctx context.Context, tools *Tools, cmds []string, changed map[string]bool, wantClean bool, st *Stats, emit func(Event)) string {
+	failed := ""
+	if len(cmds) > 0 {
+		failed = a.runChecks(ctx, tools, cmds, wantClean, st, emit)
+	}
+	var notes []string
+	files := make([]string, 0, len(changed))
+	for f := range changed {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, imp := range unusedImports(f, string(b)) {
+			rel, _ := filepath.Rel(tools.Cwd, f)
+			notes = append(notes, fmt.Sprintf("%s: import %s is not used", rel, imp))
+		}
+	}
+	if len(notes) == 0 {
+		return failed
+	}
+	emit(Event{T: "info", Text: fmt.Sprintf("%d unused imports in the changed files", len(notes))})
+	for _, n := range notes {
+		st.Checks = append(st.Checks, "qh note: "+n)
+	}
+	msg := "qh found imports that the changed files do not use:\n" + strings.Join(notes, "\n") +
+		"\n\nRemove them, build again, then give the final report."
+	if failed != "" {
+		return failed + "\n\n" + msg
+	}
+	return msg
+}
+
+// Kotlin operator and delegate names: an import of these is used without
+// its name appearing in the code.
+var kotlinOperators = map[string]bool{"getValue": true, "setValue": true, "provideDelegate": true, "invoke": true,
+	"get": true, "set": true, "contains": true, "plus": true, "minus": true, "times": true, "div": true, "rem": true,
+	"rangeTo": true, "rangeUntil": true, "compareTo": true, "iterator": true, "next": true, "hasNext": true,
+	"unaryMinus": true, "unaryPlus": true, "not": true, "inc": true, "dec": true, "plusAssign": true, "minusAssign": true,
+	"component1": true, "component2": true, "component3": true, "component4": true, "component5": true}
+
+var importRe = regexp.MustCompile(`^\s*import\s+(static\s+)?([\w.` + "`" + `]+?)(\.\*)?(\s+as\s+(\w+))?\s*;?\s*$`)
+
+// unusedImports lists the imports of a Kotlin or Java file whose simple name
+// does not appear again in the file. Star imports are skipped.
+func unusedImports(path, src string) []string {
+	if !strings.HasSuffix(path, ".kt") && !strings.HasSuffix(path, ".kts") && !strings.HasSuffix(path, ".java") {
+		return nil
+	}
+	lines := strings.Split(src, "\n")
+	type imp struct{ full, name string }
+	var imps []imp
+	var body strings.Builder
+	for _, l := range lines {
+		if m := importRe.FindStringSubmatch(l); m != nil {
+			if m[3] != "" {
+				continue
+			}
+			name := m[5]
+			if name == "" {
+				name = m[2][strings.LastIndex(m[2], ".")+1:]
+			}
+			imps = append(imps, imp{m[2], strings.Trim(name, "`")})
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(l), "package ") {
+			continue
+		}
+		body.WriteString(l + "\n")
+	}
+	text := body.String()
+	var out []string
+	for _, im := range imps {
+		if kotlinOperators[im.name] {
+			continue
+		}
+		if !regexp.MustCompile(`\b` + regexp.QuoteMeta(im.name) + `\b`).MatchString(text) {
+			out = append(out, im.full)
+		}
+	}
+	return out
 }
 
 // runChecks runs the "Done when" commands and keeps one line per command in

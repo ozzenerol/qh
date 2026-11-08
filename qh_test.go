@@ -640,3 +640,27 @@ func TestJUnitOnPipedTest(t *testing.T) {
 		t.Fatalf("piped: ok=%v %s", ok, out)
 	}
 }
+
+func TestUnusedImports(t *testing.T) {
+	src := `package a
+
+import java.time.Instant
+import java.time.ZoneOffset
+import org.x.toOffset
+import kotlin.properties.getValue
+import org.y.Thing as Other
+import org.z.*
+
+class A(val at: Instant) {
+	val b by lazy { at.toOffset() }
+	val c: Other? = null
+}
+`
+	got := unusedImports("A.kt", src)
+	if len(got) != 1 || got[0] != "java.time.ZoneOffset" {
+		t.Fatalf("unused: %q", got)
+	}
+	if unusedImports("a.go", src) != nil {
+		t.Fatal("go files are the compiler's job")
+	}
+}
