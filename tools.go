@@ -632,6 +632,9 @@ func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration)
 	if code == 1 && strings.TrimSpace(out.String()) == "" && searchCmd.MatchString(command) {
 		return "no matches [exit 1]", true
 	}
+	if errs := compilerErrors(out.String(), t.Cwd); len(errs) > 0 && (code != 0 || testCmd.MatchString(command)) {
+		res = strings.TrimRight(res, "\n") + "\n\n[qh: compiler errors]\n" + strings.Join(errs, "\n")
+	}
 	// A test command piped into tail exits 0 even when tests fail, so test
 	// commands get the report check whatever their exit code.
 	if code != 0 || testCmd.MatchString(command) {
@@ -650,6 +653,33 @@ func clip(s string) string {
 	head, tail := maxToolOut/3, maxToolOut*2/3
 	cut := strings.Count(s[head:len(s)-tail], "\n")
 	return s[:head] + fmt.Sprintf("\n...[%d lines cut; filter the output with grep, head or tail]...\n", cut) + s[len(s)-tail:]
+}
+
+var compErr = regexp.MustCompile(`^e: |^\S+\.\w+:\d+(:\d+)?: (fatal )?error:|^\[ERROR\] \S+\.(java|kt|scala):\[\d+`)
+
+// compilerErrors returns every compiler error line in out (Kotlin "e: ",
+// javac/gcc/go "file:line: error:", Maven "[ERROR] File.java:[l,c]"), with
+// file:// and the working directory cut off the paths. At most 40.
+func compilerErrors(out, cwd string) []string {
+	var errs []string
+	seen := map[string]bool{}
+	for _, l := range strings.Split(out, "\n") {
+		l = strings.TrimSpace(l)
+		if !compErr.MatchString(l) {
+			continue
+		}
+		l = strings.TrimPrefix(l, "e: ")
+		l = strings.TrimPrefix(l, "file://")
+		l = strings.ReplaceAll(l, cwd+"/", "")
+		if !seen[l] {
+			seen[l] = true
+			errs = append(errs, oneLine(l, 300))
+		}
+	}
+	if len(errs) > 40 {
+		errs = append(errs[:40], fmt.Sprintf("... and %d more", len(errs)-40))
+	}
+	return errs
 }
 
 var searchCmd = regexp.MustCompile(`(^|[|;&]\s*|\s)(grep|egrep|fgrep|rg|ag|ack)\s`)

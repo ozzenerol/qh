@@ -325,6 +325,8 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	checks := checkCommands(prompt)
 	checked := s.ReadOnly
 	changed := map[string]bool{} // files that write and edit changed in this run
+	digs := 0                    // library-digging commands since the last change
+	lastErrs := ""               // the compiler errors of the last failed build
 	fixTurn := false             // the model got one turn to fix failed checks
 	wantClean := noWarnings.MatchString(prompt)
 	defer s.setState(false, 0)
@@ -414,6 +416,28 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			seen[key]++
 			emit(Event{T: "tool", Tool: tc.Function.Name, Text: argSummary(tc.Function.Name, tc.Function.Arguments)})
 			out, ok := tools.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+			if i := strings.Index(out, "[qh: compiler errors]\n"); i >= 0 {
+				e := out[i+len("[qh: compiler errors]\n"):]
+				if j := strings.Index(e, "\n["); j >= 0 {
+					e = e[:j]
+				}
+				lastErrs = e
+			}
+			switch {
+			case tc.Function.Name == "write" || tc.Function.Name == "edit":
+				digs = 0
+			case tc.Function.Name == "bash" && libDig.MatchString(tc.Function.Arguments):
+				if digs++; digs == 3 && lastErrs != "" {
+					out += "\n\n[qh: stop exploring the library. The build failed with these errors:\n" + lastErrs +
+						"\nRead the line each error points to and fix it there.]"
+					emit(Event{T: "info", Text: "library digging: pointing the model back at the compiler errors"})
+				} else if digs == 3 {
+					out += "\n\n[qh: stop exploring the library. Go back to the failing build or test output and fix the line it points to.]"
+				}
+				if digs >= 3 {
+					digs = 0
+				}
+			}
 			if n := seen[key]; n >= 3 {
 				out = fmt.Sprintf("[you made this exact call %d times; the result will not change. Try a different step.]\n", n) + out
 			}
@@ -692,6 +716,9 @@ next:
 	}
 	return w
 }
+
+// libDig matches commands that read library jars or caches.
+var libDig = regexp.MustCompile(`unzip|\bjar\s+[tx]|javap|sources\.jar|\.gradle/caches|\.m2/repository|go/pkg/mod|site-packages|node_modules/`)
 
 var strongErr = regexp.MustCompile(`^e: |^\S+:\d+(:\d+)?:? (error|fatal)|\berror:|Exception:|Error:|panic:|expected:|AssertionFailed`)
 

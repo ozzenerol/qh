@@ -712,3 +712,48 @@ func TestFailLineGradleOrder(t *testing.T) {
 		t.Fatalf("failLine: %q", got)
 	}
 }
+
+func TestCompilerErrors(t *testing.T) {
+	out := "> Task :x:compileTestKotlin FAILED\ne: file:///repo/svc/src/A.kt:66:60 Unresolved reference 'any'.\ne: file:///repo/svc/src/A.kt:70:1 Unresolved reference 'every'.\nsrc/B.java:3: error: ';' expected\nFAILURE: Build failed"
+	got := compilerErrors(out, "/repo")
+	if len(got) != 3 || got[0] != "svc/src/A.kt:66:60 Unresolved reference 'any'." || !strings.HasPrefix(got[2], "src/B.java:3: error") {
+		t.Fatalf("errors: %q", got)
+	}
+}
+
+func TestLibraryDigNudge(t *testing.T) {
+	dir := t.TempDir()
+	n := 0
+	var last []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []Message `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		last = append(last, body.Messages[len(body.Messages)-1].Content)
+		n++
+		w.Header().Set("Content-Type", "text/event-stream")
+		cmd := `echo 'e: file:///x/A.kt:1:2 Unresolved reference' ; exit 1`
+		if n > 1 {
+			cmd = `echo unzip -p ~/.gradle/caches/mockk-sources.jar`
+		}
+		if n <= 4 {
+			args, _ := json.Marshal(map[string]string{"command": cmd})
+			call, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{
+				map[string]any{"index": 0, "id": fmt.Sprint("c", n), "function": map[string]any{"name": "bash", "arguments": string(args)}}}}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", call)
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	a := &Agent{LLM: &LLM{BaseURL: srv.URL, Model: "m", HTTP: srv.Client()}, Cfg: Config{MaxSteps: 20, MaxTokens: 100, ThinkBudget: 30000}}
+	s := &Session{Name: "t", Cwd: dir}
+	a.Run(context.Background(), s, "go", "", func(Event) {})
+	if !strings.Contains(last[4], "stop exploring the library") || !strings.Contains(last[4], "A.kt:1:2 Unresolved reference") {
+		t.Fatalf("nudge: %q", last[4])
+	}
+	if strings.Contains(last[3], "stop exploring") {
+		t.Fatal("nudge came too early")
+	}
+}
