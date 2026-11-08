@@ -141,6 +141,8 @@ type Agent struct {
 	Gate chan struct{} // one model request at a time across sessions; nil means no gate
 	Save func()        // called after each step, so the session file stays current
 	Wait func(bool)    // called when a request starts and stops waiting at the gate
+
+	UndoDir string // where the run keeps the files it changes, for qh undo; "" keeps nothing
 }
 
 // chat sends one request through the gate. The model server answers one
@@ -412,6 +414,10 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	}
 	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Seen: s.seen}
 	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
+	if !s.ReadOnly {
+		tools.Undo = newCheckpoint(a.UndoDir, s.Cwd, prompt)
+		defer tools.Undo.finish()
+	}
 	schemas := toolSchemas(s.ReadOnly)
 	system := Message{Role: "system", Content: buildSystem(s.Cwd, s.ReadOnly)}
 	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})

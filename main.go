@@ -32,6 +32,7 @@ usage:
   qh wait [-s session] [-q]    wait for the run on a session to end, then print its report and stats
   qh compact [-s session] [focus]  replace the history with a summary
   qh reset [-s session]        clear a session
+  qh undo [-s session] [-list] [-force]  restore the files the last run changed
   qh serve                     run the daemon in the foreground
   qh stop                      stop the daemon
   qh status                    show if the daemon runs
@@ -85,6 +86,8 @@ func main() {
 		name := fs.String("s", "main", "session")
 		fs.Parse(args)
 		err = simple(ClientReq{Op: "reset", Session: *name})
+	case "undo":
+		err = undoCmd(args)
 	case "stop":
 		if c, e := net.DialTimeout("unix", sockPath(), time.Second); e == nil {
 			c.Close()
