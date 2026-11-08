@@ -74,7 +74,7 @@ On a small test (one failing Python test, Qwen3.6-35B-A3B on an M3 Max), qh fixe
 {
   "url": "http://127.0.0.1:8080/v1",
   "model": "",
-  "max_steps": 80,
+  "max_steps": 120,
   "max_tokens": 16384,
   "think_budget": 30000,
   "context": 262144,

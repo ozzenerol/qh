@@ -58,7 +58,7 @@ func sockPath() string {
 }
 
 func loadConfig() Config {
-	c := Config{URL: "http://127.0.0.1:8080/v1", MaxSteps: 80, MaxTokens: 16384, ThinkBudget: 30000, Context: 262144}
+	c := Config{URL: "http://127.0.0.1:8080/v1", MaxSteps: 120, MaxTokens: 16384, ThinkBudget: 30000, Context: 262144}
 	if d, err := qhDir(); err == nil {
 		if b, err := os.ReadFile(filepath.Join(d, "config.json")); err == nil {
 			if err := json.Unmarshal(b, &c); err != nil {
