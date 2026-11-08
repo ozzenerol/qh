@@ -286,12 +286,6 @@ func statLine(st *Stats) string {
 	}
 	line := fmt.Sprintf("%s: %d steps, %d tool errors, %d failed commands, %d tokens out, %.0fs (%.1f tok/s overall), context %d tokens",
 		st.Model, st.Steps, st.ToolErrs, st.CmdFails, st.Output, st.Secs, tps, st.Prompt)
-	if st.GenSecs > 0 {
-		line += fmt.Sprintf(" | model: %.1f tok/s writing, %.0fs reading the prompt; tools %.0fs", float64(st.GenTokens)/st.GenSecs, st.PrefillSecs, st.ToolSecs)
-		if st.WaitSecs >= 1 {
-			line += fmt.Sprintf("; waited %.0fs for another session", st.WaitSecs)
-		}
-	}
 	if st.Removes > 0 {
 		line += fmt.Sprintf(", %d rm -r", st.Removes)
 	}
@@ -308,6 +302,12 @@ func statLine(st *Stats) string {
 		line += fmt.Sprintf(" (%d%% of %d)", pct, st.Window)
 		if pct >= 60 || st.Prompt > 80000 {
 			line += "; the session is big and slower now (tok/s falls with context): use a new session for the next feature, or qh compact -s NAME"
+		}
+	}
+	if st.GenSecs > 0 {
+		line += fmt.Sprintf(" | model: %.1f tok/s writing, %.0fs reading the prompt; tools %.0fs", float64(st.GenTokens)/st.GenSecs, st.PrefillSecs, st.ToolSecs)
+		if st.WaitSecs >= 1 {
+			line += fmt.Sprintf("; waited %.0fs for another session", st.WaitSecs)
 		}
 	}
 	return line
