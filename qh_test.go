@@ -1082,3 +1082,16 @@ func TestNegativeAsserts(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestUsesReactor(t *testing.T) {
+	dir := t.TempDir()
+	m := filepath.Join(dir, "src", "main", "kotlin", "F.kt")
+	os.MkdirAll(filepath.Dir(m), 0o755)
+	os.WriteFile(m, []byte("import reactor.core.publisher.Mono\nfun f(): Mono<Void> = Mono.empty()\n"), 0o644)
+	tf := filepath.Join(dir, "src", "test", "kotlin", "FTest.kt")
+	os.MkdirAll(filepath.Dir(tf), 0o755)
+	os.WriteFile(tf, []byte("val x: Mono<Int>\n"), 0o644)
+	if !usesReactor(map[string]bool{m: true}) || usesReactor(map[string]bool{tf: true}) {
+		t.Fatal("usesReactor")
+	}
+}

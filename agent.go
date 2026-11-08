@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -426,8 +427,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	editFile, editRun := "", 0   // edits in a row on one file
 	lastErrs := ""               // the compiler errors of the last failed build
 	blocked := 0                 // library commands blocked after the second nudge
-	testEdits := 0               // writes and edits to test files since the last main-code change
-	fixTurn := false             // the model got one turn to fix failed checks
+	reactiveTold := false
+	testEdits := 0   // writes and edits to test files since the last main-code change
+	fixTurn := false // the model got one turn to fix failed checks
 	wantClean := noWarnings.MatchString(prompt)
 	defer s.setState(false, 0)
 
@@ -540,6 +542,11 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 					e = e[:j]
 				}
 				lastErrs = e
+			}
+			if !reactiveTold && strings.Contains(out, "[qh: failing tests from the JUnit XML reports]") && usesReactor(changed) {
+				reactiveTold = true
+				out += "\n\n" + reactiveHint
+				emit(Event{T: "info", Text: "tests fail on Reactor code: adding the empty-Mono hint"})
 			}
 			if (tc.Function.Name == "edit" || tc.Function.Name == "write") && ok {
 				var pa struct{ Path string }
@@ -1133,6 +1140,21 @@ func negativeAsserts(changed map[string]bool) string {
 		return ""
 	}
 	return "\n\nThese assertions check that something is absent. Each passes when the value is empty, encoded (base64, escaped) or the wrong object. For each one, say what the checked value holds when the code is right, and make sure it would contain the thing if the code were wrong:\n" + strings.Join(out, "\n")
+}
+
+const reactiveHint = "[qh: this is Reactor code. A failure with no exception (wrong status, empty body, a handler never called) is often an empty Mono: a Mono that completes empty skips every later map and flatMap. map must not return null (use mapNotNull or flatMap with Mono.empty() on purpose), Mono.create { it.success(null) } is empty, and defaultIfEmpty or switchIfEmpty shows where it went empty. Check the main code's pipeline before you change the tests.]"
+
+// usesReactor is true when a changed main-code file uses Mono or Flux.
+func usesReactor(changed map[string]bool) bool {
+	for f := range changed {
+		if isTestPath(f) {
+			continue
+		}
+		if b, err := os.ReadFile(f); err == nil && (bytes.Contains(b, []byte("reactor.core.publisher")) || bytes.Contains(b, []byte("Mono<")) || bytes.Contains(b, []byte("Flux<"))) {
+			return true
+		}
+	}
+	return false
 }
 
 // isTestPath is true for files named like tests or kept under a test folder.
