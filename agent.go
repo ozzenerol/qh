@@ -829,6 +829,19 @@ func (a *Agent) finalChecks(ctx context.Context, tools *Tools, prompt string, cm
 			failed = msg
 		}
 	}
+	if preds := gatewayPredicates(files); len(preds) > 0 {
+		emit(Event{T: "info", Text: fmt.Sprintf("%d gateway routes with predicates that replace each other", len(preds))})
+		for _, m := range preds {
+			st.Checks = append(st.Checks, "qh note: "+m)
+		}
+		msg := "In the Spring Cloud Gateway Kotlin DSL, each predicate call on its own line replaces the one before it, so the route matches on the last one only:\n" + strings.Join(preds, "\n") +
+			"\n\nJoin them with and (path(\"/x\") and method(HttpMethod.GET)), build again, then give the final report."
+		if failed != "" {
+			failed += "\n\n" + msg
+		} else {
+			failed = msg
+		}
+	}
 	if miss := missingAnnotations(prompt, files); len(miss) > 0 {
 		emit(Event{T: "info", Text: fmt.Sprintf("%d annotations from the task are missing", len(miss))})
 		for _, m := range miss {
@@ -1230,6 +1243,40 @@ func usesReactor(changed map[string]bool) bool {
 	return false
 }
 
+var gwPred = regexp.MustCompile(`^\s*(path|method|host|header|query|cookie|remoteAddr|weight|before|after|between|readBody)\s*\(`)
+
+// gatewayPredicates finds route blocks in Kotlin gateway DSL files with two
+// predicate calls as separate statements; the second silently replaces the
+// first.
+func gatewayPredicates(files []string) []string {
+	var out []string
+	for _, f := range files {
+		if !strings.HasSuffix(f, ".kt") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil || !bytes.Contains(b, []byte("route(")) || !bytes.Contains(b, []byte("uri(")) {
+			continue
+		}
+		lines := strings.Split(string(b), "\n")
+		prev := -1
+		for i, l := range lines {
+			t := strings.TrimSpace(l)
+			switch {
+			case gwPred.MatchString(l):
+				joined := prev >= 0 && (strings.HasSuffix(strings.TrimSpace(lines[prev]), " and") || strings.HasSuffix(strings.TrimSpace(lines[prev]), " or"))
+				if prev >= 0 && !joined && !strings.HasPrefix(t, "and ") && !strings.HasPrefix(t, "or ") {
+					out = append(out, fmt.Sprintf("%s:%d: %s (after %s on line %d)", filepath.Base(f), i+1, t, strings.TrimSpace(lines[prev]), prev+1))
+				}
+				prev = i
+			case strings.HasPrefix(t, "route(") || strings.HasPrefix(t, "}") || strings.Contains(t, "route {"):
+				prev = -1
+			}
+		}
+	}
+	return out
+}
+
 // isTestPath is true for files named like tests or kept under a test folder.
 func isTestPath(f string) bool {
 	low := strings.ToLower(f)
@@ -1503,7 +1550,7 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, exps
 			strings.Join(warns, "\n") + "\n\nFix them, run the command again, then give the final report."
 	}
 	return "qh ran the commands from the \"Done when\" part after your report, and these failed:\n\n" +
-		strings.Join(fails, "\n\n") + "\n\nFix the cause, run the command again, then give the final report."
+		strings.Join(fails, "\n\n") + "\n\nFix the cause, run the command again, then give the final report. Do not call it an environment or test-setup problem unless you can name the failing assertion and show that the main code it runs is right."
 }
 
 // noWarnings matches a task that asks for code without warnings.

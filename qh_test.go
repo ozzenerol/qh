@@ -1096,3 +1096,37 @@ func TestUsesReactor(t *testing.T) {
 		t.Fatal("usesReactor")
 	}
 }
+
+func TestGatewayPredicates(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "Routes.kt")
+	os.WriteFile(f, []byte(`val r = coRouter {}
+fun routes(b: RouteLocatorBuilder) = b.routes {
+    route("me") {
+        path("/me")
+        method(HttpMethod.GET)
+        uri("http://u")
+    }
+    route("ok") {
+        path("/ok") and method(HttpMethod.GET)
+        uri("http://u")
+    }
+    route("ok2") {
+        path("/a") and
+            method(HttpMethod.POST)
+        uri("http://u")
+    }
+}
+`), 0o644)
+	got := gatewayPredicates([]string{f})
+	if len(got) != 1 || !strings.HasPrefix(got[0], "Routes.kt:5: method(HttpMethod.GET)") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestBlameLine(t *testing.T) {
+	r := "Done. The failures are test environment/interaction issues rather than code defects; the code logic itself is correct."
+	if blameLine(r, []string{"qh check FAILED: ./gradlew test"}) == "" || blameLine(r, []string{"qh check passed: x"}) != "" || blameLine("All fixed.", []string{"qh check FAILED: x"}) != "" {
+		t.Fatal("blameLine")
+	}
+}

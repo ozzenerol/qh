@@ -390,7 +390,8 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 		final = ss.Msgs[n-1].Content
 	}
 	if len(st.Checks) > 0 {
-		final = checkVerdict(st.Checks) + "\n\n" + strings.TrimSpace(final) + "\n\n" + strings.Join(st.Checks, "\n")
+		blame := blameLine(final, st.Checks)
+		final = checkVerdict(st.Checks) + blame + "\n\n" + strings.TrimSpace(final) + "\n\n" + strings.Join(st.Checks, "\n")
 	}
 	if len(st.Todo) > 0 {
 		final = strings.TrimSpace(final) + "\n\nqh: todo items not done: " + strings.Join(st.Todo, "; ")
@@ -602,6 +603,24 @@ func onOff(b bool) string {
 
 // checkVerdict is one line for the top of the report, so a reader sees what
 // qh measured before what the model claims.
+var blameRe = regexp.MustCompile(`(?i)[^.\n]*\b(test environment|environment(al)? (issue|problem)|not (a|due to a|caused by a) (code )?(defect|bug|issue)|the code (logic )?(itself )?is correct|infrastructure (issue|problem)|flaky|test (setup|harness|configuration) (issue|problem))\b[^.\n]*`)
+
+// blameLine flags a report that blames the environment while checks failed.
+// The model says this when it cannot find its bug, and it is usually wrong.
+func blameLine(report string, checks []string) string {
+	failed := false
+	for _, c := range checks {
+		if strings.HasPrefix(c, "qh check FAILED") {
+			failed = true
+		}
+	}
+	m := blameRe.FindString(report)
+	if !failed || m == "" {
+		return ""
+	}
+	return "\nqh: the report says \"" + oneLine(strings.TrimSpace(m), 160) + "\" while checks failed. That claim is not checked; assume a code bug until the failing assertion is explained."
+}
+
 func checkVerdict(lines []string) string {
 	pass, fail, skip, info := 0, 0, 0, 0
 	for _, l := range lines {
