@@ -23,6 +23,7 @@ type Session struct {
 	Cwd        string     `json:"cwd"`
 	Think      bool       `json:"think"`
 	ReadOnly   bool       `json:"read_only"`
+	Todo       []TodoItem `json:"todo,omitempty"`
 	LastPrompt int        `json:"last_prompt"` // tokens of the last request
 	Msgs       []Message  `json:"messages"`
 	mu         sync.Mutex // held for the whole run
@@ -117,6 +118,7 @@ type Stats struct {
 	ToolErrs int      `json:"tool_errors"`
 	Limit    bool     `json:"step_limit,omitempty"` // the run stopped at max_steps
 	Checks   []string `json:"checks,omitempty"`     // results of the "Done when" commands
+	Todo     []string `json:"todo_open,omitempty"`  // todo items not done at the end
 }
 
 type Event struct {
@@ -258,10 +260,11 @@ func checkSpans(prompt string) (cmds, skipped []string) {
 	return out, skipped
 }
 
-const systemPrompt = `You are a coding agent. You work in %s on %s. Your tools are read, write, edit and bash.
+const systemPrompt = `You are a coding agent. You work in %s on %s. Your tools are read, write, edit, bash, grep, glob and todo.
 
+For a task with 3 or more steps, write a todo list first and keep it current.
 Work in small steps. Read the code before you change it. After each change, build or run the tests and read the result.
-Use bash for ls, grep, find, git, builds and tests. Filter long output with grep, head or tail.
+Search code with grep and find files with glob. Use bash for git, builds and tests; filter long output with head or tail.
 To check a library API, print its signatures (javap -cp JAR CLASS, go doc PKG.NAME, python -c "help(...)") instead of unpacking its sources.
 Use edit for small changes and write for new files. In edit, copy old exactly from the file and leave out the line numbers.
 Do not ask for permission. Do the task.
@@ -431,6 +434,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	testEdits := 0   // writes and edits to test files since the last main-code change
 	fixTurn := false // the model got one turn to fix failed checks
 	wantClean := noWarnings.MatchString(prompt)
+	todoDue := false // remind the model of its open todo items after the next tool call
 	defer s.setState(false, 0)
 
 	// limit grows by passGrace for each pass that qh asks for after the
@@ -501,7 +505,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			if !selfChecked {
 				selfChecked = true
 				emit(Event{T: "info", Text: "self-check: asking the model to compare its work with the task"})
-				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk + negativeRules(prompt) + negativeAsserts(changed), From: "qh"})
+				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk + negativeRules(prompt) + negativeAsserts(changed) + todoSelfCheck(s.Todo), From: "qh"})
 				limit = max(limit, st.Steps+passGrace)
 				continue
 			}
@@ -533,6 +537,8 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				if blocked++; blocked >= 2 && lastErrs != "" {
 					out += "\n\n[qh: the last build failed with:\n" + lastErrs + "\nFix this line in your own file. Do not look for the answer in the library.]"
 				}
+			} else if tc.Function.Name == "todo" && !s.ReadOnly {
+				out, ok = runTodo(s, tc.Function.Arguments, emit)
 			} else {
 				out, ok = tools.Run(ctx, tc.Function.Name, tc.Function.Arguments)
 			}
@@ -626,6 +632,10 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		} else if st.Steps%10 == 0 {
 			last.Content += fmt.Sprintf("\n\n[qh: step %d of %d]", st.Steps, limit)
 		}
+		if st.Steps%todoEvery == 0 || todoDue {
+			last.Content += todoReminder(s.Todo)
+			todoDue = false
+		}
 		if s.LastPrompt > a.compactAt() {
 			if err := a.Compact(ctx, s, "the task that is in progress now", emit); err != nil {
 				emit(Event{T: "error", Text: "compaction failed: " + err.Error()})
@@ -633,6 +643,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			}
 			s.Msgs = append(s.Msgs, Message{Role: "user", From: "compact",
 				Content: "Continue the task from the summary. Check the files before you change them again."})
+			todoDue = true
 		}
 	}
 	if !ended && st.Steps >= limit && ctx.Err() == nil {
@@ -653,6 +664,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			st.Checks = append(st.Checks, "qh check skipped (not a command qh runs): "+c)
 		}
 	}
+	st.Todo = todoOpen(s.Todo)
 	st.Secs = time.Since(t0).Seconds()
 	return st
 }
@@ -681,6 +693,18 @@ func argSummary(name, raw string) string {
 		return s
 	case "edit", "write", "ls":
 		return str("path")
+	case "glob":
+		return str("pattern")
+	case "todo":
+		if it, err := parseTodo(raw); err == nil {
+			d := 0
+			for _, x := range it {
+				if x.Status == "done" {
+					d++
+				}
+			}
+			return fmt.Sprintf("%d items, %d done", len(it), d)
+		}
 	case "grep":
 		s := str("pattern")
 		if p := str("path"); p != "" {

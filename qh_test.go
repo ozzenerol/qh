@@ -220,7 +220,7 @@ func TestReadOnlyTools(t *testing.T) {
 	if out, ok := tl.Run(ctx, "ls", `{}`); !ok || out != "src/\n" {
 		t.Fatalf("ls: %q", out)
 	}
-	if len(toolSchemas(true)) != 3 || len(toolSchemas(false)) != 4 {
+	if len(toolSchemas(true)) != 3 || len(toolSchemas(false)) != 7 {
 		t.Fatal("schemas")
 	}
 }
@@ -773,7 +773,7 @@ func TestPatternHint(t *testing.T) {
 		t.Fatalf("bash hint: %s", out)
 	}
 	tl.ReadOnly = true
-	if out, _ := tl.Run(context.Background(), "grep", `{"pattern":"any("}`); !strings.Contains(out, "grep -F") {
+	if out, _ := tl.Run(context.Background(), "grep", `{"pattern":"any("}`); !strings.Contains(out, "literal") {
 		t.Fatalf("grep tool hint: %s", out)
 	}
 }
