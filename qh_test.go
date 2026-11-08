@@ -991,3 +991,32 @@ func TestReflectionInTests(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestJUnitSummary(t *testing.T) {
+	dir := t.TempDir()
+	d := filepath.Join(dir, "build", "test-results", "test")
+	os.MkdirAll(d, 0o755)
+	os.WriteFile(filepath.Join(d, "TEST-a.AlphaTest.xml"), []byte(`<testsuite><testcase name="x" classname="a.AlphaTest"/><testcase name="y" classname="a.AlphaTest"><failure message="boom">boom
+	at a.AlphaTest.y(AlphaTest.kt:3)</failure></testcase><testcase name="z" classname="a.AlphaTest"><skipped/></testcase></testsuite>`), 0o644)
+	os.WriteFile(filepath.Join(d, "TEST-a.BetaTest.xml"), []byte(`<testsuite><testcase name="x" classname="a.BetaTest"/></testsuite>`), 0o644)
+	sum, f := junitFailures(dir, time.Now().Add(-time.Minute))
+	if sum != "2 passed, 1 failed, 1 skipped (AlphaTest 3, BetaTest 1)" || !strings.Contains(f, "FAILED a.AlphaTest.y: boom") {
+		t.Fatalf("sum %q f %q", sum, f)
+	}
+}
+
+func TestBSDSedHint(t *testing.T) {
+	if !bsdSed.MatchString(`sed: 1: "src/A.kt": invalid command code s`) || bsdSed.MatchString("sed: can't read x: No such file") {
+		t.Fatal("bsdSed")
+	}
+}
+
+func TestStrayFiles(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init", "-q").Run()
+	os.WriteFile(filepath.Join(dir, "A.kt"), nil, 0o644)
+	os.WriteFile(filepath.Join(dir, "A.kt.bak"), nil, 0o644)
+	if got := strayFiles(dir); len(got) != 1 || got[0] != "A.kt.bak" {
+		t.Fatalf("got %q", got)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -751,6 +752,9 @@ func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration)
 	if code == 1 && strings.TrimSpace(out.String()) == "" && searchCmd.MatchString(command) {
 		return "no matches [exit 1]", true
 	}
+	if code != 0 && bsdSed.MatchString(out.String()) && strings.Contains(command, "sed -i") {
+		res = strings.TrimRight(res, "\n") + "\n" + bsdSedHint
+	}
 	if code != 0 && badPattern.MatchString(out.String()) {
 		res = strings.TrimRight(res, "\n") + "\n" + patternHint
 	}
@@ -763,8 +767,12 @@ func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration)
 	// A test command piped into tail exits 0 even when tests fail, so test
 	// commands get the report check whatever their exit code.
 	if code != 0 || testCmd.MatchString(command) {
-		if f := junitFailures(t.Cwd, start); f != "" {
+		sum, f := junitFailures(t.Cwd, start)
+		if f != "" {
 			res = strings.TrimRight(res, "\n") + "\n\n[qh: failing tests from the JUnit XML reports]\n" + f
+		}
+		if sum != "" {
+			res = strings.TrimRight(res, "\n") + "\n[qh: tests: " + sum + "]"
 		}
 	}
 	return fmt.Sprintf("%s\n[exit %d]", strings.TrimRight(res, "\n"), code), code == 0
@@ -846,6 +854,10 @@ func importHints(errs []string) []string {
 	return out
 }
 
+var bsdSed = regexp.MustCompile(`sed: \d+: .*(invalid command code|extra characters|unknown option|undefined label|expects \\ followed by text|unterminated)|sed: -I or -i may not be used`)
+
+const bsdSedHint = "[qh: this is BSD sed (macOS). Its -i takes a suffix argument: use sed -i '' 's/a/b/' FILE, or the edit tool. Do not use -i.bak, it leaves a backup file in the tree.]"
+
 // badPattern matches the errors grep and rg give for a broken regular
 // expression, which is usually a literal search with ( [ { or * in it.
 var badPattern = regexp.MustCompile(`(?i)parentheses not balanced|brackets \(\[ \]\) not balanced|unmatched [(\[{]|invalid (regular expression|preceding regular expression|content of)|regex parse error|trailing backslash|invalid range end`)
@@ -857,8 +869,9 @@ var searchCmd = regexp.MustCompile(`(^|[|;&]\s*|\s)(grep|egrep|fgrep|rg|ag|ack)\
 var testCmd = regexp.MustCompile(`(?i)\b(test|tests|check|verify|gradlew?|mvnw?|integrationTest)\b`)
 
 type junitCase struct {
-	Name    string `xml:"name,attr"`
-	Class   string `xml:"classname,attr"`
+	Name    string    `xml:"name,attr"`
+	Class   string    `xml:"classname,attr"`
+	Skipped *struct{} `xml:"skipped"`
 	Failure *struct {
 		Message string `xml:"message,attr"`
 		Text    string `xml:",chardata"`
@@ -873,7 +886,7 @@ type junitCase struct {
 // surefire and failsafe) written since start and lists the failing tests with
 // their message and the top of the stack. The model then does not need to
 // dig in build/ for them.
-func junitFailures(root string, start time.Time) string {
+func junitFailures(root string, start time.Time) (string, string) {
 	var files []string
 	seen := 0
 	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
@@ -899,7 +912,8 @@ func junitFailures(root string, start time.Time) string {
 		return nil
 	})
 	var b strings.Builder
-	n := 0
+	n, total, skipped := 0, 0, 0
+	perClass := map[string]int{}
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
@@ -917,6 +931,12 @@ func junitFailures(root string, start time.Time) string {
 			}
 			var c junitCase
 			if dec.DecodeElement(&c, &se) != nil {
+				continue
+			}
+			total++
+			perClass[c.Class[strings.LastIndex(c.Class, ".")+1:]]++
+			if c.Skipped != nil {
+				skipped++
 				continue
 			}
 			msg, text := "", ""
@@ -945,7 +965,25 @@ func junitFailures(root string, start time.Time) string {
 	if n > 10 {
 		fmt.Fprintf(&b, "... and %d more failing tests\n", n-10)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	sum := ""
+	if total > 0 {
+		sum = fmt.Sprintf("%d passed, %d failed, %d skipped", total-n-skipped, n, skipped)
+		names := make([]string, 0, len(perClass))
+		for c := range perClass {
+			names = append(names, c)
+		}
+		sort.Strings(names)
+		if len(names) <= 12 {
+			var parts []string
+			for _, c := range names {
+				parts = append(parts, fmt.Sprintf("%s %d", c, perClass[c]))
+			}
+			sum += " (" + strings.Join(parts, ", ") + ")"
+		} else {
+			sum += fmt.Sprintf(" in %d classes", len(names))
+		}
+	}
+	return sum, strings.TrimRight(b.String(), "\n")
 }
 
 // similar is the Dice coefficient of the character pairs of a and b (0 to 1).

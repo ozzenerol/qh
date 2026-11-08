@@ -414,8 +414,14 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	selfChecked := doneWhen(prompt) == ""
 	checks, skippedChecks := checkSpans(prompt)
 	checked := s.ReadOnly
+	strays0 := map[string]bool{}
+	if !s.ReadOnly {
+		for _, f := range strayFiles(s.Cwd) {
+			strays0[f] = true
+		}
+	}
 	changed := map[string]bool{} // files that write and edit changed in this run
-	digs := 0                    // library-digging commands since the last change
+	digs := 0                    // library-digging commands since the last passing build
 	nudges := 0                  // times the model was told to stop digging
 	editFile, editRun := "", 0   // edits in a row on one file
 	lastErrs := ""               // the compiler errors of the last failed build
@@ -549,7 +555,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				editFile, editRun = "", 0
 			}
 			switch {
-			case tc.Function.Name == "write" || tc.Function.Name == "edit":
+			case tc.Function.Name == "bash" && ok && testCmd.MatchString(tc.Function.Arguments) && !libDig.MatchString(tc.Function.Arguments):
 				digs = 0
 			case tc.Function.Name == "bash" && libDig.MatchString(tc.Function.Arguments):
 				if digs++; digs >= 3 {
@@ -618,6 +624,11 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		}
 	}
 	if !s.ReadOnly {
+		for _, f := range strayFiles(s.Cwd) {
+			if !strays0[f] {
+				st.Checks = append(st.Checks, "qh note: the run left a backup file: "+f)
+			}
+		}
 		for _, c := range skippedChecks {
 			st.Checks = append(st.Checks, "qh check skipped (not a command qh runs): "+c)
 		}
@@ -942,6 +953,25 @@ func removeUnusedImports(cwd string, changed map[string]bool, st *Stats, emit fu
 	}
 }
 
+var strayRe = regexp.MustCompile(`(\.bak|\.orig|\.rej|\.tmp|\.swp|~)$`)
+
+// strayFiles lists the untracked backup and temp files in the git repo of dir.
+func strayFiles(dir string) []string {
+	cmd := exec.Command("git", "status", "--porcelain", "--untracked-files=all")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var fs []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(l, "?? ") && strayRe.MatchString(l) {
+			fs = append(fs, strings.Trim(l[3:], `"`))
+		}
+	}
+	return fs
+}
+
 var reflectRe = regexp.MustCompile(`getDeclaredField|getDeclaredMethod|isAccessible\s*=\s*true|setAccessible\(\s*true|trySetAccessible|ReflectionTestUtils|FieldUtils\.`)
 
 // reflectionInTests lists the lines of changed test files that open up
@@ -1073,6 +1103,8 @@ func unusedImports(path, src string) []string {
 	return out
 }
 
+var testsLine = regexp.MustCompile(`\[qh: tests: ([^\]\n]+)\]`)
+
 // runChecks runs the "Done when" commands and keeps one line per command in
 // st.Checks. When one fails, it returns a message for the model; else "".
 func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, wantClean bool, st *Stats, emit func(Event)) string {
@@ -1093,7 +1125,11 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, want
 				st.Checks = append(st.Checks, fmt.Sprintf("qh check passed with %d warnings: %s", len(w), c))
 				warns = append(warns, w...)
 			} else {
-				st.Checks = append(st.Checks, "qh check passed: "+c)
+				line := "qh check passed: " + c
+				if m := testsLine.FindStringSubmatch(out); m != nil {
+					line += " (tests: " + m[1] + ")"
+				}
+				st.Checks = append(st.Checks, line)
 			}
 			continue
 		}
