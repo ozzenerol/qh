@@ -1257,3 +1257,25 @@ func TestScope(t *testing.T) {
 		t.Fatal(msg)
 	}
 }
+
+func TestNullAndWipeAsserts(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "src/test/kotlin/UploadIT.kt")
+	os.MkdirAll(filepath.Dir(f), 0o755)
+	os.WriteFile(f, []byte("@BeforeEach fun clean() { jdbc.update(\"DELETE FROM job.jobs\") }\n"+
+		"jdbc.update(\"DELETE FROM job.jobs WHERE id = ?\", id)\n"+
+		"assertThat(logEntry.moderationScore).isNull()\n"+
+		"assertThat(logEntry.note).isNull()\n"), 0o644)
+	ch := map[string]bool{f: true}
+	got := nullAsserts("upload log row ALLOW with score 0.01 and model name", ch)
+	if !strings.Contains(got, "moderationScore") || strings.Contains(got, "note") || !strings.Contains(got, "score 0.01") {
+		t.Fatalf("null: %q", got)
+	}
+	w := wipeInTests(ch)
+	if !strings.Contains(w, ":1:") || strings.Contains(w, ":2:") {
+		t.Fatalf("wipe: %q", w)
+	}
+	if nullAsserts("no values here", ch) != "" {
+		t.Fatal("false positive")
+	}
+}

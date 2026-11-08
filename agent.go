@@ -586,7 +586,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			if !selfChecked {
 				selfChecked = true
 				emit(Event{T: "info", Text: "self-check: asking the model to compare its work with the task"})
-				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk + negativeRules(prompt) + negativeAsserts(changed) + scopeCheck(prompt, changed, s.Cwd) + todoSelfCheck(s.Todo), From: "qh"})
+				s.Msgs = append(s.Msgs, Message{Role: "user", Content: selfCheckAsk + negativeRules(prompt) + negativeAsserts(changed) + nullAsserts(prompt, changed) + wipeInTests(changed) + scopeCheck(prompt, changed, s.Cwd) + todoSelfCheck(s.Todo), From: "qh"})
 				limit = max(limit, st.Steps+passGrace)
 				continue
 			}
@@ -1309,6 +1309,88 @@ func negativeAsserts(changed map[string]bool) string {
 		return ""
 	}
 	return "\n\nThese assertions check that something is absent. Each passes when the value is empty, encoded (base64, escaped) or the wrong object. For each one, say what the checked value holds when the code is right, and make sure it would contain the thing if the code were wrong:\n" + strings.Join(out, "\n")
+}
+
+var (
+	nullRe   = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\)?\s*\)?\s*\.(?:isNull\(\)|toBeNull\(\))|assertNull\(\s*[\w.]*?([A-Za-z_][A-Za-z0-9_]*)\s*\)|([A-Za-z_][A-Za-z0-9_]*)\s*(?:shouldBe|==)\s*null\b`)
+	camelRe  = regexp.MustCompile(`[A-Z]?[a-z0-9]+|[A-Z]+`)
+	wipeRe   = regexp.MustCompile(`(?i)\bTRUNCATE\b|\bflushAll\b|\bflushDb\b|\bdeleteAll\(\s*\)|\bdropDatabase\b`)
+	deleteRe = regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+[\w."]+`)
+)
+
+// briefValue finds where the brief gives a literal value for a field named
+// like word: the word, then a number, quoted text or boolean close after it.
+func briefValue(prompt, word string) string {
+	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(word) + `\w*\b[^.\n]{0,25}?(\d+(?:\.\d+)?|"[^"]+"|'[^']+'|\btrue\b|\bfalse\b)`)
+	return re.FindString(prompt)
+}
+
+// nullAsserts quotes test assertions that expect null for a field the
+// brief gives a value to, so a test bent to match a bug gets a second look.
+func nullAsserts(prompt string, changed map[string]bool) string {
+	files := make([]string, 0, len(changed))
+	for f := range changed {
+		if isTestPath(f) {
+			files = append(files, f)
+		}
+	}
+	sort.Strings(files)
+	var out []string
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for i, l := range strings.Split(string(b), "\n") {
+			m := nullRe.FindStringSubmatch(l)
+			if m == nil || len(out) >= 10 {
+				continue
+			}
+			field := m[1] + m[2] + m[3]
+			for _, w := range camelRe.FindAllString(field, -1) {
+				if len(w) < 4 {
+					continue
+				}
+				if v := briefValue(prompt, w); v != "" {
+					out = append(out, fmt.Sprintf("%s:%d: %s (the task says: %q)", filepath.Base(f), i+1, strings.TrimSpace(l), v))
+					break
+				}
+			}
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return "\n\nThese assertions expect null, but the task gives a value for that field. A test must check what the task asks for, not what the code does now. If the code returns null here, fix the code and the test:\n" + strings.Join(out, "\n")
+}
+
+// wipeInTests quotes test lines that empty a whole table or store. Other
+// test classes sharing the database or container then lose their data.
+func wipeInTests(changed map[string]bool) string {
+	files := make([]string, 0, len(changed))
+	for f := range changed {
+		if isTestPath(f) {
+			files = append(files, f)
+		}
+	}
+	sort.Strings(files)
+	var out []string
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for i, l := range strings.Split(string(b), "\n") {
+			hit := wipeRe.MatchString(l) || deleteRe.MatchString(l) && !strings.Contains(strings.ToUpper(l), "WHERE")
+			if hit && len(out) < 10 {
+				out = append(out, fmt.Sprintf("%s:%d: %s", filepath.Base(f), i+1, strings.TrimSpace(l)))
+			}
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return "\n\nThese test lines delete every row of a table or every key of a store. Other test classes that share the database or container lose their data and fail when the suite runs together. Delete only the rows this test created (WHERE on its own ids), or give each test unique ids and delete nothing:\n" + strings.Join(out, "\n")
 }
 
 const reactiveHint = "[qh: this is Reactor code. A failure with no exception (wrong status, empty body, a handler never called) is often an empty Mono: a Mono that completes empty skips every later map and flatMap. map must not return null (use mapNotNull or flatMap with Mono.empty() on purpose), Mono.create { it.success(null) } is empty, and defaultIfEmpty or switchIfEmpty shows where it went empty. Check the main code's pipeline before you change the tests.]"
