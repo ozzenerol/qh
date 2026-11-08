@@ -23,6 +23,9 @@ import (
 type FormatCfg struct {
 	Format      map[string]string `json:"format,omitempty"`       // file extension -> command; the file paths go at the end
 	SortImports *bool             `json:"sort_imports,omitempty"` // sort the imports of Kotlin and Java files
+
+	Diagnostics map[string]string `json:"diagnostics,omitempty"`         // file extension -> checker run after each write or edit; {file}, {dir}
+	DiagTimeout int               `json:"diagnostics_timeout,omitempty"` // seconds per check, default 20
 }
 
 type Config struct {
