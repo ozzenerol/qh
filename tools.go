@@ -756,6 +756,9 @@ func (t *Tools) bash(ctx context.Context, command string, timeout time.Duration)
 	}
 	if errs := compilerErrors(out.String(), t.Cwd); len(errs) > 0 && (code != 0 || testCmd.MatchString(command)) {
 		res = strings.TrimRight(res, "\n") + "\n\n[qh: compiler errors]\n" + strings.Join(errs, "\n")
+		if imps := importHints(errs); len(imps) > 0 {
+			res += "\nThese unresolved names usually need these imports:\n" + strings.Join(imps, "\n")
+		}
 	}
 	// A test command piped into tail exits 0 even when tests fail, so test
 	// commands get the report check whatever their exit code.
@@ -802,6 +805,45 @@ func compilerErrors(out, cwd string) []string {
 		errs = append(errs[:40], fmt.Sprintf("... and %d more", len(errs)-40))
 	}
 	return errs
+}
+
+var unresolved = regexp.MustCompile(`Unresolved reference:? '?(\w+)'?`)
+
+// testImports maps names from common Kotlin test DSLs to their import.
+// The model loses many steps hunting for these in jars.
+var testImports = map[string]string{
+	"every": "io.mockk.every", "coEvery": "io.mockk.coEvery", "verify": "io.mockk.verify",
+	"coVerify": "io.mockk.coVerify", "mockk": "io.mockk.mockk", "spyk": "io.mockk.spyk",
+	"slot": "io.mockk.slot", "just": "io.mockk.just", "Runs": "io.mockk.Runs",
+	"confirmVerified": "io.mockk.confirmVerified", "clearMocks": "io.mockk.clearMocks",
+	"verifyOrder": "io.mockk.verifyOrder", "verifySequence": "io.mockk.verifySequence",
+	"MockKExtension": "io.mockk.junit5.MockKExtension", "MockK": "io.mockk.impl.annotations.MockK",
+	"InjectMockKs": "io.mockk.impl.annotations.InjectMockKs", "SpykBean": "com.ninjasquad.springmockk.SpykBean",
+	"MockkBean":                 "com.ninjasquad.springmockk.MockkBean",
+	"assertThat":                "org.assertj.core.api.Assertions.assertThat",
+	"assertThatThrownBy":        "org.assertj.core.api.Assertions.assertThatThrownBy",
+	"assertThatCode":            "org.assertj.core.api.Assertions.assertThatCode",
+	"assertThatExceptionOfType": "org.assertj.core.api.Assertions.assertThatExceptionOfType",
+	"assertThrows":              "org.junit.jupiter.api.assertThrows", "assertEquals": "org.junit.jupiter.api.Assertions.assertEquals",
+	"assertTrue": "org.junit.jupiter.api.Assertions.assertTrue", "assertFalse": "org.junit.jupiter.api.Assertions.assertFalse",
+	"assertNull": "org.junit.jupiter.api.Assertions.assertNull", "assertNotNull": "org.junit.jupiter.api.Assertions.assertNotNull",
+	"jsonPath": "org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath",
+	"status":   "org.springframework.test.web.servlet.result.MockMvcResultMatchers.status",
+}
+
+// importHints lists the import lines for unresolved names that qh knows.
+func importHints(errs []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, e := range errs {
+		for _, m := range unresolved.FindAllStringSubmatch(e, -1) {
+			if imp, ok := testImports[m[1]]; ok && !seen[imp] {
+				seen[imp] = true
+				out = append(out, "import "+imp)
+			}
+		}
+	}
+	return out
 }
 
 // badPattern matches the errors grep and rg give for a broken regular

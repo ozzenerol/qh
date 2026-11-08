@@ -973,3 +973,21 @@ func TestMissingAnnotations(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestImportHints(t *testing.T) {
+	got := importHints([]string{"src/test/kotlin/A.kt:12:30 Unresolved reference 'just'.", "src/test/kotlin/A.kt:12:35 Unresolved reference: Runs", "A.kt:3:1 Unresolved reference 'foo'."})
+	if strings.Join(got, ",") != "import io.mockk.just,import io.mockk.Runs" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestReflectionInTests(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "SenderTest.kt")
+	os.WriteFile(f, []byte("val f = Sender::class.java.getDeclaredField(\"host\")\nf.isAccessible = true\n"), 0o644)
+	g := filepath.Join(dir, "Sender.kt")
+	os.WriteFile(g, []byte("val f = x.getDeclaredField(\"a\")\n"), 0o644)
+	if got := reflectionInTests([]string{f, g}); len(got) != 2 || !strings.HasPrefix(got[1], "SenderTest.kt:2:") {
+		t.Fatalf("got %q", got)
+	}
+}

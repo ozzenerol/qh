@@ -419,6 +419,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	nudges := 0                  // times the model was told to stop digging
 	editFile, editRun := "", 0   // edits in a row on one file
 	lastErrs := ""               // the compiler errors of the last failed build
+	blocked := 0                 // library commands blocked after the second nudge
 	fixTurn := false             // the model got one turn to fix failed checks
 	wantClean := noWarnings.MatchString(prompt)
 	defer s.setState(false, 0)
@@ -520,6 +521,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			var ok bool
 			if nudges >= 2 && tc.Function.Name == "bash" && libDig.MatchString(tc.Function.Arguments) {
 				out = "error: qh blocks digging in library jars and caches for the rest of this run. Write the code and compile it; the compiler names any class or method that is missing."
+				if blocked++; blocked >= 2 && lastErrs != "" {
+					out += "\n\n[qh: the last build failed with:\n" + lastErrs + "\nFix this line in your own file. Do not look for the answer in the library.]"
+				}
 			} else {
 				out, ok = tools.Run(ctx, tc.Function.Name, tc.Function.Arguments)
 			}
@@ -706,6 +710,19 @@ func (a *Agent) finalChecks(ctx context.Context, tools *Tools, prompt string, cm
 		for _, imp := range unusedImports(f, string(b)) {
 			rel, _ := filepath.Rel(tools.Cwd, f)
 			notes = append(notes, fmt.Sprintf("%s: import %s is not used", rel, imp))
+		}
+	}
+	if smells := reflectionInTests(files); len(smells) > 0 {
+		emit(Event{T: "info", Text: fmt.Sprintf("%d tests use reflection on private fields", len(smells))})
+		for _, m := range smells {
+			st.Checks = append(st.Checks, "qh note: "+m)
+		}
+		msg := "These tests reach private fields by reflection:\n" + strings.Join(smells, "\n") +
+			"\n\nThat usually hides a design or compile problem. Set the value through a constructor, a setter or test config instead; if you cannot, say why in the final report."
+		if failed != "" {
+			failed += "\n\n" + msg
+		} else {
+			failed = msg
 		}
 	}
 	if miss := missingAnnotations(prompt, files); len(miss) > 0 {
@@ -923,6 +940,30 @@ func removeUnusedImports(cwd string, changed map[string]bool, st *Stats, emit fu
 			st.Checks = append(st.Checks, fmt.Sprintf("qh removed unused imports from %s: %s", rel, strings.Join(unused, ", ")))
 		}
 	}
+}
+
+var reflectRe = regexp.MustCompile(`getDeclaredField|getDeclaredMethod|isAccessible\s*=\s*true|setAccessible\(\s*true|trySetAccessible|ReflectionTestUtils|FieldUtils\.`)
+
+// reflectionInTests lists the lines of changed test files that open up
+// private members by reflection.
+func reflectionInTests(files []string) []string {
+	var out []string
+	for _, f := range files {
+		low := strings.ToLower(f)
+		if !strings.Contains(strings.ToLower(filepath.Base(f)), "test") && !strings.Contains(low, "/test/") && !strings.Contains(low, "/src/test") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for i, l := range strings.Split(string(b), "\n") {
+			if reflectRe.MatchString(l) {
+				out = append(out, fmt.Sprintf("%s:%d: %s", filepath.Base(f), i+1, strings.TrimSpace(l)))
+			}
+		}
+	}
+	return out
 }
 
 var annDecl = regexp.MustCompile(`((?:@\w+(?:\([^)]*\))?\s+)+)(?:(?:public|private|internal|protected|open|abstract|final|data|sealed|enum|static|suspend|override)\s+)*(class|object|interface|fun|record)\s+(\w+)`)
