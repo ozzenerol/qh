@@ -38,8 +38,9 @@ type EvalResult struct {
 	Pass     bool    `json:"pass"`
 	Steps    int     `json:"steps"`
 	ToolErrs int     `json:"tool_errors"`
-	Prompt   int     `json:"prompt_tokens"` // the last request
-	Fresh    int     `json:"fresh_tokens"`  // prompt tokens the server did not have in its cache, all requests
+	CmdFails int     `json:"failed_commands,omitempty"` // counted in tool_errors before qh split them
+	Prompt   int     `json:"prompt_tokens"`             // the last request
+	Fresh    int     `json:"fresh_tokens"`              // prompt tokens the server did not have in its cache, all requests
 	Output   int     `json:"output_tokens"`
 	Secs     float64 `json:"secs"`
 	Limit    bool    `json:"step_limit,omitempty"`
@@ -160,7 +161,7 @@ func (a *Agent) runTask(ctx context.Context, t EvalTask, run int, timeout time.D
 			fmt.Fprintf(log, "  error: %s\n", e.Text)
 		}
 	})
-	r.Explores, r.ExpSteps = st.Explores, st.ExploreSteps
+	r.Explores, r.ExpSteps, r.CmdFails = st.Explores, st.ExploreSteps, st.CmdFails
 	r.Steps, r.ToolErrs, r.Prompt, r.Fresh, r.Output, r.Secs, r.Limit = st.Steps, st.ToolErrs, st.Prompt, st.Fresh, st.Output, st.Secs, st.Limit
 	if ctx.Err() != nil {
 		r.Error = "timeout"
@@ -221,7 +222,7 @@ func resultLine(r EvalResult) string {
 		extra += fmt.Sprintf("  explore %d/%d steps", r.Explores, r.ExpSteps)
 	}
 	return fmt.Sprintf("%s %-22s run %d  steps %3d  errs %2d  ctx %6d  fresh %7d  out %6d  %5.0fs%s",
-		v, r.Task, r.Run, r.Steps, r.ToolErrs, r.Prompt, r.Fresh, r.Output, r.Secs, extra)
+		v, r.Task, r.Run, r.Steps, r.ToolErrs+r.CmdFails, r.Prompt, r.Fresh, r.Output, r.Secs, extra)
 }
 
 // runEval runs the tasks (all, or the names in only) n times each and
@@ -284,7 +285,7 @@ func aggregate(rs []EvalResult) (map[string]*evalAgg, []string) {
 			g.pass++
 		}
 		g.steps += r.Steps
-		g.errs += r.ToolErrs
+		g.errs += r.ToolErrs + r.CmdFails // the old meaning, so -compare works across files
 		g.fresh += r.Fresh
 		g.out += r.Output
 		g.secs += r.Secs

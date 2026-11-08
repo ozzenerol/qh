@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -432,7 +431,8 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		s.seen = map[string]*fileSeen{}
 	}
 	s.runs++
-	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Seen: s.seen}
+	changed := map[string]bool{} // files that write and edit changed in this run
+	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Seen: s.seen, Changed: changed}
 	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
 	if !s.ReadOnly {
 		tools.BG = newBG()
@@ -459,12 +459,11 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			strays0[f] = true
 		}
 	}
-	changed := map[string]bool{} // files that write and edit changed in this run
-	digs := 0                    // library-digging commands since the last passing build
-	nudges := 0                  // times the model was told to stop digging
-	editFile, editRun := "", 0   // edits in a row on one file
-	lastErrs := ""               // the compiler errors of the last failed build
-	blocked := 0                 // library commands blocked after the second nudge
+	digs := 0                  // library-digging commands since the last passing build
+	nudges := 0                // times the model was told to stop digging
+	editFile, editRun := "", 0 // edits in a row on one file
+	lastErrs := ""             // the compiler errors of the last failed build
+	blocked := 0               // library commands blocked after the second nudge
 	reactiveTold := false
 	testEdits := 0   // writes and edits to test files since the last main-code change
 	fixTurn := false // the model got one turn to fix failed checks
@@ -597,25 +596,25 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				out += "\n\n" + reactiveHint
 				emit(Event{T: "info", Text: "tests fail on Reactor code: adding the empty-Mono hint"})
 			}
+			wrotePath := ""
 			if (tc.Function.Name == "edit" || tc.Function.Name == "write") && ok {
-				var pa struct{ Path string }
-				json.Unmarshal([]byte(tc.Function.Arguments), &pa)
-				if isTestPath(pa.Path) {
+				wrotePath, _ = filepath.Rel(tools.Cwd, tools.LastPath)
+			}
+			if wrotePath != "" {
+				if isTestPath(wrotePath) {
 					if testEdits++; testEdits == 8 || testEdits == 16 {
 						out += fmt.Sprintf("\n\n[qh: that is %d changes to test files and none to the main code since then. The tests may be right: read the failure again, mainly the actual values and the response, and check the main code against it.]", testEdits)
 						emit(Event{T: "info", Text: "many test edits: pointing the model at the main code"})
 					}
-				} else if pa.Path != "" {
+				} else {
 					testEdits = 0
 				}
 			}
 			if tc.Function.Name == "edit" && ok {
-				var pa struct{ Path string }
-				json.Unmarshal([]byte(tc.Function.Arguments), &pa)
-				if pa.Path == editFile {
+				if wrotePath == editFile {
 					editRun++
 				} else {
-					editFile, editRun = pa.Path, 1
+					editFile, editRun = wrotePath, 1
 				}
 				if editRun == 5 {
 					out += "\n\n[qh: that is 5 edits in a row on this file. For many small changes in one file, write the whole file once, or make them with one sed or perl command.]"
@@ -650,12 +649,6 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				st.CmdFails++
 			} else if !ok {
 				st.ToolErrs++
-			} else if tc.Function.Name == "write" || tc.Function.Name == "edit" {
-				var pa struct{ Path, File_path string }
-				json.Unmarshal([]byte(tc.Function.Arguments), &pa)
-				if p := cmp.Or(pa.Path, pa.File_path); p != "" {
-					changed[tools.path(p)] = true
-				}
 			}
 			summary := firstLine(out)
 			if !ok {
