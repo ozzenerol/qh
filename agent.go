@@ -168,7 +168,7 @@ func (a *Agent) chat(ctx context.Context, r Request, onDelta func(Delta) bool, e
 	return a.LLM.Chat(ctx, r, onDelta)
 }
 
-const selfCheckAsk = `Before you report, read the task again, mainly its "Done when" part and every numbered or bulleted requirement. For each one, say done or not done. For each numeric rule in the task (a range, a minimum or maximum, a limit, a default), name the file and line that enforces it, and check what happens at and past the edge. Fix every item that is not done. Then give the final report.`
+const selfCheckAsk = `Before you report, read the task again, mainly its "Done when" part and every numbered or bulleted requirement. For each one, say done or not done. For each numeric rule in the task (a range, a minimum or maximum, a limit, a default), name the file and line that enforces it, and check what happens at and past the edge. For each test you wrote, name the line of production code that would have to be wrong for it to fail; a test that cannot fail is not done. Fix every item that is not done. Then give the final report.`
 
 // doneWhen returns the "Done when" part of a task, or "".
 func doneWhen(prompt string) string {

@@ -850,3 +850,14 @@ func TestFormatConfig(t *testing.T) {
 		t.Fatalf("file %q checks %q", b, st.Checks)
 	}
 }
+
+func TestFindDecl(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "err"), 0o755)
+	os.WriteFile(filepath.Join(dir, "err", "Errors.kt"), []byte("package e\n\nopen class BadRequestException : RuntimeException()\n"), 0o644)
+	tl := &Tools{Cwd: dir}
+	out, _ := tl.Run(context.Background(), "read", `{"path":"err/BadRequestException.kt"}`)
+	if !strings.Contains(out, "declared here: err/Errors.kt:3") {
+		t.Fatalf("decl: %s", out)
+	}
+}

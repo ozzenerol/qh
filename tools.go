@@ -154,6 +154,8 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		if !ok && strings.Contains(out, "no such file") {
 			if m := t.findByName(filepath.Base(p)); len(m) > 0 {
 				out += "\ndid you mean: " + strings.Join(m, ", ")
+			} else if d := t.findDecl(strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))); len(d) > 0 {
+				out += "\nno file has that name, but the type is declared here: " + strings.Join(d, ", ")
 			}
 		}
 		return out, ok
@@ -585,6 +587,30 @@ func (t *Tools) findByName(base string) []string {
 	}
 	if len(out) > 5 {
 		out = out[:5]
+	}
+	return out
+}
+
+// findDecl finds where a class, interface, object, enum, record, struct or
+// type with this name is declared (for files that hold several types).
+func (t *Tools) findDecl(name string) []string {
+	if name == "" || !regexp.MustCompile(`^[A-Za-z_]\w*$`).MatchString(name) {
+		return nil
+	}
+	pat := `\b(class|interface|object|enum|record|struct|trait|type)\s+` + name + `\b`
+	cmd := exec.Command("git", "grep", "-nIE", pat)
+	cmd.Dir = t.Cwd
+	b, err := cmd.Output()
+	if err != nil {
+		cmd = exec.Command("grep", "-rnIE", "--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=build", pat, ".")
+		cmd.Dir = t.Cwd
+		b, _ = cmd.Output()
+	}
+	var out []string
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if parts := strings.SplitN(l, ":", 3); len(parts) == 3 && len(out) < 5 {
+			out = append(out, strings.TrimPrefix(parts[0], "./")+":"+parts[1])
+		}
 	}
 	return out
 }
