@@ -1,0 +1,42 @@
+PageSize in page.go parses the size query parameter. Make it accept sizes from 1 to 100. An empty value means 20. Zero, negative numbers, values above 100 and anything that is not a number return an error. Add tests.
+
+Done when: `go test ./...` passes.
+-- check.sh --
+set -e
+cat > zz_eval_test.go <<'EOF'
+package page
+
+import "testing"
+
+func TestEvalPageSize(t *testing.T) {
+	ok := map[string]int{"": 20, "1": 1, "20": 20, "99": 99, "100": 100}
+	for in, want := range ok {
+		if got, err := PageSize(in); err != nil || got != want {
+			t.Errorf("PageSize(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"0", "-1", "101", "1000", "abc", "1.5"} {
+		if _, err := PageSize(in); err == nil {
+			t.Errorf("PageSize(%q): no error", in)
+		}
+	}
+}
+EOF
+go vet ./...
+go test -count=1 ./...
+-- go.mod --
+module page
+
+go 1.22
+-- page.go --
+package page
+
+import "strconv"
+
+// PageSize parses the size query parameter of the list endpoints.
+func PageSize(raw string) (int, error) {
+	if raw == "" {
+		return 20, nil
+	}
+	return strconv.Atoi(raw)
+}

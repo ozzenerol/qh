@@ -69,6 +69,25 @@ I use it with Claude Code as the coordinator. Claude writes the task, runs `qh r
 
 On a small test (one failing Python test, Qwen3.6-35B-A3B on an M3 Max), qh fixed it in 9.6 s and pi in 11.7 s. That is one run each, not a benchmark.
 
+## Eval
+
+`qh eval` runs a fixed set of tasks through the agent of the binary that runs it (not the daemon), so two builds can be compared on the same work. Each task is one file in `eval/` and is built into the binary: the prompt, a `check.sh`, and the files of a small repo, each after a `-- path --` line. qh writes the files to a temp git repo, runs the prompt there, then runs `check.sh` in the repo; exit code 0 is a pass. `check.sh` lives outside the repo, so the model cannot read it, and it brings its own hidden tests.
+
+The eight tasks come from mistakes seen in real runs: a 401 whose status is never set (`status-401`), tests that pass on wrong code (`weak-test`, checked against five mutants of the function), a JSON struct tag (`json-tag`), an import left unused after a rewrite (`unused-import`), a "do not modify the caller's slice" rule (`do-not-rule`), a range checked at and past its ends (`page-limit`), an error check that swallows more than the missing-file case (`swallowed-error`), and backup files left by `sed -i.bak` (`backup-file`). Seven are Go, one is Python; none needs the network.
+
+```sh
+qh eval                          # every task once
+qh eval -only status-401,page-limit -n 3
+qh eval -list
+qh eval -compare ~/.qh/eval/A.json ~/.qh/eval/B.json
+```
+
+Each run prints one line: pass or fail, steps, failed tool calls, the size of the last request, fresh tokens (prompt tokens that the server did not have in its cache, summed over the requests), output tokens and seconds. The results go to `~/.qh/eval/DATE.json` with the version, the git commit of the build and the model. `-compare` prints the pass count and the means per task for both files. `-dir DIR` reads `.task` files from a folder, `-timeout` limits each task (20m by default), `-v` prints the tool calls. The eval sends its requests straight to the model server, not through the daemon, so it should run when no other run uses the model.
+
+## Prompt cache
+
+The server reuses its cache for the part of a request that matches an earlier one from the start, so qh never changes a message once it was sent. Notes such as `[qh: step N of M]` go into the newest tool result before it is sent, and later hints come as new messages. The system prompt is built once per session and kept in the session file, so a run that edits `AGENTS.md` or adds a source folder does not change it; it is built again for a new or reset session, after compaction, and when the folder or the read-only mode changes. When a run is stopped between tool calls, the next run first answers the open calls with "interrupted". A test (`TestPromptOnlyGrows`) runs two turns, a compaction and a third turn through a fake model and checks that each request starts with the exact messages of the one before.
+
 ## Config
 
 `~/.qh/config.json` (every field is optional):

@@ -1,0 +1,76 @@
+Rename the function fetchUser to loadUser everywhere in this repo, comments included.
+
+Done when: `go build ./...` passes and `grep -rn fetchUser --include=*.go .` prints nothing.
+-- check.sh --
+set -e
+go vet ./...
+if grep -rn fetchUser --exclude-dir=.git . ; then echo "fetchUser is still there"; exit 1; fi
+grep -q 'func loadUser' users/users.go
+extra=$(git status --porcelain --untracked-files=all | grep -v '^ M' || true)
+[ -z "$extra" ] || { echo "the run left files: $extra"; exit 1; }
+-- go.mod --
+module app
+
+go 1.22
+-- users/users.go --
+package users
+
+import "fmt"
+
+type User struct {
+	ID   int
+	Name string
+}
+
+var db = map[int]User{1: {1, "ana"}, 2: {2, "bo"}}
+
+// fetchUser returns the user with the given id.
+func fetchUser(id int) (User, error) {
+	u, ok := db[id]
+	if !ok {
+		return User{}, fmt.Errorf("fetchUser: no user %d", id)
+	}
+	return u, nil
+}
+
+// Name returns the name of user id, or "" (see fetchUser).
+func Name(id int) string {
+	u, err := fetchUser(id)
+	if err != nil {
+		return ""
+	}
+	return u.Name
+}
+-- users/admin.go --
+package users
+
+// IsAdmin reports if id is an admin. It calls fetchUser so unknown ids fail.
+func IsAdmin(id int) bool {
+	u, err := fetchUser(id)
+	return err == nil && u.ID == 1
+}
+-- users/users_test.go --
+package users
+
+import "testing"
+
+func TestFetchUser(t *testing.T) {
+	if u, err := fetchUser(2); err != nil || u.Name != "bo" {
+		t.Fatal(u, err)
+	}
+	if !IsAdmin(1) || IsAdmin(2) || Name(9) != "" {
+		t.Fatal("admin")
+	}
+}
+-- main.go --
+package main
+
+import (
+	"fmt"
+
+	"app/users"
+)
+
+func main() {
+	fmt.Println(users.Name(1))
+}

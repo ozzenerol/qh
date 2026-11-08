@@ -1,0 +1,88 @@
+GET /me must answer 401 with the JSON body {"error":"unauthorized"} when the Authorization header is missing or the bearer token is unknown. A known token still gets 200 and the user. Add a test for the 401 case.
+
+Done when: `go test ./...` passes.
+-- check.sh --
+set -e
+cat > zz_eval_test.go <<'EOF'
+package me
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestEval401(t *testing.T) {
+	h := Handler(map[string]User{"t1": {Name: "ana"}})
+	for _, auth := range []string{"", "Bearer nope", "t1"} {
+		r := httptest.NewRequest("GET", "/me", nil)
+		if auth != "" {
+			r.Header.Set("Authorization", auth)
+		}
+		w := httptest.NewRecorder()
+		h(w, r)
+		var body map[string]string
+		json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != 401 || body["error"] != "unauthorized" {
+			t.Fatalf("auth %q: status %d body %s", auth, w.Code, w.Body)
+		}
+	}
+	r := httptest.NewRequest("GET", "/me", nil)
+	r.Header.Set("Authorization", "Bearer t1")
+	w := httptest.NewRecorder()
+	h(w, r)
+	var u User
+	json.Unmarshal(w.Body.Bytes(), &u)
+	if w.Code != http.StatusOK || u.Name != "ana" {
+		t.Fatalf("known token: %d %s", w.Code, w.Body)
+	}
+}
+EOF
+go vet ./...
+go test -count=1 ./...
+-- go.mod --
+module me
+
+go 1.22
+-- me.go --
+package me
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+)
+
+type User struct {
+	Name string `json:"name"`
+}
+
+// Handler serves GET /me. tokens maps a bearer token to its user.
+func Handler(tokens map[string]User) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		u := tokens[token]
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(u)
+	}
+}
+-- me_test.go --
+package me
+
+import (
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestKnownToken(t *testing.T) {
+	h := Handler(map[string]User{"abc": {Name: "ana"}})
+	r := httptest.NewRequest("GET", "/me", nil)
+	r.Header.Set("Authorization", "Bearer abc")
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"ana"`) {
+		t.Fatalf("got %d %s", w.Code, w.Body)
+	}
+}

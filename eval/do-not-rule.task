@@ -1,0 +1,63 @@
+Add Median(xs []float64) float64 to stats.go: the middle value of xs, the mean of the two middle values when the count is even, and 0 for an empty slice. Add tests for it.
+
+Do not modify the caller's slice. Do not add any file other than tests.
+
+Done when: `go test ./...` passes.
+-- check.sh --
+set -e
+extra=$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep -v -e '^stats.go$' -e '_test.go$' || true)
+[ -z "$extra" ] || { echo "files other than tests: $extra"; exit 1; }
+cat > zz_eval_test.go <<'EOF'
+package stats
+
+import "testing"
+
+func TestEvalMedian(t *testing.T) {
+	xs := []float64{5, 1, 4, 2}
+	if got := Median(xs); got != 3 {
+		t.Fatalf("even: %v", got)
+	}
+	if xs[0] != 5 || xs[1] != 1 || xs[2] != 4 || xs[3] != 2 {
+		t.Fatalf("the input slice was changed: %v", xs)
+	}
+	if got := Median([]float64{9, 3, 7}); got != 7 {
+		t.Fatalf("odd: %v", got)
+	}
+	if got := Median(nil); got != 0 {
+		t.Fatalf("empty: %v", got)
+	}
+	if got := Median([]float64{-2}); got != -2 {
+		t.Fatalf("one: %v", got)
+	}
+}
+EOF
+go vet ./...
+go test -count=1 ./...
+-- go.mod --
+module stats
+
+go 1.22
+-- stats.go --
+package stats
+
+// Mean returns the average of xs, or 0 for an empty slice.
+func Mean(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, x := range xs {
+		sum += x
+	}
+	return sum / float64(len(xs))
+}
+-- stats_test.go --
+package stats
+
+import "testing"
+
+func TestMean(t *testing.T) {
+	if Mean([]float64{1, 2, 3}) != 2 || Mean(nil) != 0 {
+		t.Fatal("mean")
+	}
+}

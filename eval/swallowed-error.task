@@ -1,0 +1,66 @@
+When the config file does not exist, Load in config.go must return the default config (Port 8080, Host "localhost") and no error. Fields that the file leaves out also take the default values. Every other error (a file that cannot be read, bad JSON) is still returned. Add tests.
+
+Done when: `go test ./...` passes.
+-- check.sh --
+set -e
+cat > zz_eval_test.go <<'EOF'
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestEvalLoad(t *testing.T) {
+	d := t.TempDir()
+	c, err := Load(filepath.Join(d, "missing.json"))
+	if err != nil || c.Port != 8080 || c.Host != "localhost" {
+		t.Fatalf("missing: %+v %v", c, err)
+	}
+	p := filepath.Join(d, "part.json")
+	os.WriteFile(p, []byte(`{"port":9000}`), 0o644)
+	c, err = Load(p)
+	if err != nil || c.Port != 9000 || c.Host != "localhost" {
+		t.Fatalf("partial: %+v %v", c, err)
+	}
+	os.WriteFile(p, []byte(`{"port":`), 0o644)
+	if _, err := Load(p); err == nil {
+		t.Fatal("bad JSON: no error")
+	}
+	if _, err := Load(d); err == nil {
+		t.Fatal("a directory: no error")
+	}
+}
+EOF
+go vet ./...
+go test -count=1 ./...
+-- go.mod --
+module config
+
+go 1.22
+-- config.go --
+package config
+
+import (
+	"encoding/json"
+	"os"
+)
+
+type Config struct {
+	Port int    `json:"port"`
+	Host string `json:"host"`
+}
+
+// Load reads the config file at path.
+func Load(path string) (Config, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+	var c Config
+	if err := json.Unmarshal(b, &c); err != nil {
+		return Config{}, err
+	}
+	return c, nil
+}

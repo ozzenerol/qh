@@ -1,0 +1,62 @@
+Add a CustomerID field (int64) to Order in order.go. In the JSON it must be named customer_id, and it must be left out when it is 0. Keep the other fields as they are.
+
+Done when: `go test ./...` passes.
+-- check.sh --
+set -e
+cat > zz_eval_test.go <<'EOF'
+package order
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestEvalCustomerID(t *testing.T) {
+	b, err := OrderJSON(Order{ID: 1, Total: 5, CustomerID: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	json.Unmarshal(b, &m)
+	if m["customer_id"] != 7.0 || m["id"] != 1.0 || m["total_cents"] != 5.0 || len(m) != 3 {
+		t.Fatalf("got %s", b)
+	}
+	b, _ = OrderJSON(Order{ID: 2})
+	m = nil
+	json.Unmarshal(b, &m)
+	if _, ok := m["customer_id"]; ok {
+		t.Fatalf("customer_id is not left out at 0: %s", b)
+	}
+}
+EOF
+go vet ./...
+go test -count=1 ./...
+-- go.mod --
+module order
+
+go 1.22
+-- order.go --
+package order
+
+import "encoding/json"
+
+type Order struct {
+	ID    int `json:"id"`
+	Total int `json:"total_cents"`
+}
+
+// OrderJSON is the body of GET /orders/{id}.
+func OrderJSON(o Order) ([]byte, error) {
+	return json.Marshal(o)
+}
+-- order_test.go --
+package order
+
+import "testing"
+
+func TestOrderJSON(t *testing.T) {
+	b, err := OrderJSON(Order{ID: 3, Total: 250})
+	if err != nil || string(b) != `{"id":3,"total_cents":250}` {
+		t.Fatalf("%s %v", b, err)
+	}
+}

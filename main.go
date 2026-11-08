@@ -32,6 +32,7 @@ usage:
   qh wait [-s session] [-q]    wait for the run on a session to end, then print its report and stats
   qh compact [-s session] [focus]  replace the history with a summary
   qh reset [-s session]        clear a session
+  qh eval [-only a,b] [-n N]   run the benchmark tasks with this build; -compare A.json B.json, -list
   qh serve                     run the daemon in the foreground
   qh stop                      stop the daemon
   qh status                    show if the daemon runs
@@ -67,6 +68,8 @@ func main() {
 		err = runCmd(args)
 	case "serve":
 		err = serve()
+	case "eval":
+		err = evalCmd(args)
 	case "wait":
 		fs := flag.NewFlagSet("wait", flag.ExitOnError)
 		name := fs.String("s", "main", "session")

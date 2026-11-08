@@ -1,0 +1,62 @@
+clamp.go has no tests. Write clamp_test.go with tests that fail for any wrong Clamp: check below the range, above it, inside it, and exactly at both ends. Do not change clamp.go.
+
+Done when: `go test ./...` passes.
+-- check.sh --
+set -e
+git diff --quiet HEAD -- clamp.go || { echo "clamp.go was changed"; exit 1; }
+test -f clamp_test.go || { echo "no clamp_test.go"; exit 1; }
+go test -count=1 ./... >/dev/null || { echo "tests fail on the right Clamp"; exit 1; }
+keep=$(mktemp)
+cp clamp.go "$keep"
+trap 'cp "$keep" clamp.go; rm -f "$keep"' EXIT
+mutant() {
+	printf 'package clamp\n\nfunc Clamp(v, lo, hi int) int {\n%s\n}\n' "$2" > clamp.go
+	if go test -count=1 ./... >/dev/null 2>&1; then echo "the tests pass on a wrong Clamp: $1"; exit 1; fi
+}
+mutant identity '	return v'
+mutant no-upper '	if v < lo {
+		return lo
+	}
+	return v'
+mutant no-lower '	if v > hi {
+		return hi
+	}
+	return v'
+mutant at-upper-end '	if v < lo {
+		return lo
+	}
+	if v == hi {
+		return hi - 1
+	}
+	if v > hi {
+		return hi
+	}
+	return v'
+mutant at-lower-end '	if v == lo {
+		return lo + 1
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v'
+echo ok
+-- go.mod --
+module clamp
+
+go 1.22
+-- clamp.go --
+package clamp
+
+// Clamp returns v limited to the range [lo, hi].
+func Clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}

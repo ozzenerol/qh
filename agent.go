@@ -114,6 +114,7 @@ type Stats struct {
 	Steps    int      `json:"steps"`
 	Prompt   int      `json:"prompt_tokens"`
 	Cached   int      `json:"cached_tokens"`
+	Fresh    int      `json:"fresh_tokens"` // prompt tokens of all requests that were not in the server's cache
 	Output   int      `json:"output_tokens"`
 	Thinking int      `json:"thinking_chars"`
 	Secs     float64  `json:"secs"`
@@ -504,6 +505,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			break
 		}
 		st.Prompt, st.Cached = u.PromptTokens, u.Details.CachedTokens
+		st.Fresh += u.PromptTokens - u.Details.CachedTokens
 		st.Output += u.CompletionTokens
 		s.LastPrompt = u.PromptTokens + u.CompletionTokens
 		s.Msgs = append(s.Msgs, msg)

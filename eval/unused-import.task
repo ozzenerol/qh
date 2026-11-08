@@ -1,0 +1,75 @@
+Rewrite paths.py to use pathlib instead of os and os.path. The functions still take and return str.
+
+Done when: `python3 test_paths.py` passes.
+-- check.sh --
+set -e
+python3 test_paths.py
+python3 - <<'EOF'
+import ast, sys
+src = open("paths.py").read()
+tree = ast.parse(src)
+names = {}
+for n in ast.walk(tree):
+    if isinstance(n, ast.Import):
+        for a in n.names:
+            names[(a.asname or a.name).split(".")[0]] = a.name
+    elif isinstance(n, ast.ImportFrom):
+        for a in n.names:
+            names[a.asname or a.name] = (n.module or "") + "." + a.name
+used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+bad = [full for short, full in names.items() if short not in used]
+if bad:
+    sys.exit("unused imports: " + ", ".join(bad))
+if "os" in names:
+    sys.exit("paths.py still imports os")
+EOF
+t=$(mktemp --suffix=.py)
+cat > "$t" <<'EOF'
+import os, sys, tempfile
+sys.path.insert(0, os.getcwd())
+import paths
+h = tempfile.mkdtemp()
+assert paths.config_path(h) == os.path.join(h, ".app", "config.toml")
+assert isinstance(paths.config_path(h), str)
+assert paths.cache_dir(h) == os.path.join(h, ".cache", "app")
+d = os.path.join(h, "a", "b")
+assert paths.ensure_dir(d) == d and os.path.isdir(d)
+assert paths.ensure_dir(d) == d
+EOF
+python3 "$t"; rc=$?; rm -f "$t"; exit $rc
+-- paths.py --
+import os
+import os.path
+
+
+def config_path(home):
+    return os.path.join(home, ".app", "config.toml")
+
+
+def cache_dir(home):
+    return os.path.join(home, ".cache", "app")
+
+
+def ensure_dir(p):
+    os.makedirs(p, exist_ok=True)
+    return p
+-- test_paths.py --
+import tempfile
+import unittest
+
+import paths
+
+
+class PathsTest(unittest.TestCase):
+    def test_config_path(self):
+        self.assertTrue(paths.config_path("/h").endswith("config.toml"))
+
+    def test_ensure_dir(self):
+        d = tempfile.mkdtemp() + "/x/y"
+        self.assertEqual(paths.ensure_dir(d), d)
+
+
+if __name__ == "__main__":
+    unittest.main()
+-- .gitignore --
+__pycache__/
