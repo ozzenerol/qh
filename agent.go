@@ -804,7 +804,7 @@ func (a *Agent) finalChecks(ctx context.Context, tools *Tools, prompt string, cm
 	tools.Refresh(changed)
 	failed := ""
 	if len(cmds) > 0 {
-		failed = a.runChecks(ctx, tools, cmds, checkExpects(prompt), wantClean, st, emit)
+		failed = a.runChecks(ctx, tools, cmds, checkExpects(prompt), wantClean, changedTests(changed), st, emit)
 	}
 	var notes []string
 	files := make([]string, 0, len(changed))
@@ -1283,6 +1283,24 @@ func gatewayPredicates(files []string) []string {
 	return out
 }
 
+// changedTests is true when the run wrote or edited a test file.
+func changedTests(changed map[string]bool) bool {
+	for f := range changed {
+		if isTestPath(f) {
+			return true
+		}
+	}
+	return false
+}
+
+// rerunCmd makes Gradle run the tests again instead of calling them up to date.
+func rerunCmd(c string) string {
+	if strings.Contains(c, "gradle") && !strings.Contains(c, "--rerun") && !strings.ContainsAny(c, "|;&") {
+		return c + " --rerun-tasks"
+	}
+	return c
+}
+
 // isTestPath is true for files named like tests or kept under a test folder.
 func isTestPath(f string) bool {
 	low := strings.ToLower(f)
@@ -1501,7 +1519,7 @@ var testsLine = regexp.MustCompile(`\[qh: tests: ([^\]\n]+)\]`)
 
 // runChecks runs the "Done when" commands and keeps one line per command in
 // st.Checks. When one fails, it returns a message for the model; else "".
-func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, exps map[string]expect, wantClean bool, st *Stats, emit func(Event)) string {
+func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, exps map[string]expect, wantClean, rerun bool, st *Stats, emit func(Event)) string {
 	st.Checks = nil
 	var fails, warns []string
 	for _, c := range cmds {
@@ -1520,6 +1538,27 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, exps
 			}
 		}
 		emit(Event{T: "result", Tool: "check", OK: ok, Text: summary})
+		if ok && rerun && testCmd.MatchString(c) && !printOnly(c) {
+			again := rerunCmd(c)
+			emit(Event{T: "tool", Tool: "check", Text: again + " (again, the run changed tests)"})
+			args, _ := json.Marshal(map[string]any{"command": again, "timeout": 900})
+			out2, ok2 := tools.Run(ctx, "bash", string(args))
+			if ok2 {
+				if why := exp.miss(out2); why != "" {
+					ok2, out2 = false, why+"\n\n"+out2
+				}
+			}
+			emit(Event{T: "result", Tool: "check", OK: ok2, Text: firstLine(out2)})
+			if !ok2 {
+				st.Checks = append(st.Checks, "qh check FAILED (flaky: passed 1 of 2 runs): "+c)
+				tail := out2
+				if len(tail) > 3000 {
+					tail = tail[len(tail)-3000:]
+				}
+				fails = append(fails, "`"+c+"` passed once and failed when qh ran it again, so a test is flaky (timing, ordering, shared state, a server closing early). Make it pass every time; do not just retry it:\n"+tail)
+				continue
+			}
+		}
 		if ok && exp == (expect{}) && printOnly(c) {
 			st.Checks = append(st.Checks, "qh check info (its exit code proves nothing, read the output): "+c+"\n    "+strings.Join(outLines(out, 5), "\n    "))
 			continue

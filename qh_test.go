@@ -1130,3 +1130,9 @@ func TestBlameLine(t *testing.T) {
 		t.Fatal("blameLine")
 	}
 }
+
+func TestRerunCmd(t *testing.T) {
+	if rerunCmd("./gradlew :a:test") != "./gradlew :a:test --rerun-tasks" || rerunCmd("./gradlew test --rerun-tasks") != "./gradlew test --rerun-tasks" || rerunCmd("go test ./...") != "go test ./..." || rerunCmd("./gradlew test | tail") != "./gradlew test | tail" {
+		t.Fatal("rerunCmd")
+	}
+}
