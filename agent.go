@@ -262,11 +262,12 @@ func checkSpans(prompt string) (cmds, skipped []string) {
 	return out, skipped
 }
 
-const systemPrompt = `You are a coding agent. You work in %s on %s. Your tools are read, write, edit, bash, grep, glob and todo.
+const systemPrompt = `You are a coding agent. You work in %s on %s. Your tools are read, write, edit, bash, bg, grep, glob and todo.
 
 For a task with 3 or more steps, write a todo list first and keep it current.
 Work in small steps. Read the code before you change it. After each change, build or run the tests and read the result.
 Search code with grep and find files with glob. Use bash for git, builds and tests; filter long output with head or tail.
+For a server or watcher, use bash with background: true and read its output with bg.
 To check a library API, print its signatures (javap -cp JAR CLASS, go doc PKG.NAME, python -c "help(...)") instead of unpacking its sources.
 Use edit for small changes and write for new files. In edit, copy old exactly from the file and leave out the line numbers.
 Do not ask for permission. Do the task.
@@ -412,6 +413,10 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	}
 	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Seen: s.seen}
 	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
+	if !s.ReadOnly {
+		tools.BG = newBG()
+		defer tools.BG.Close()
+	}
 	schemas := toolSchemas(s.ReadOnly)
 	system := Message{Role: "system", Content: buildSystem(s.Cwd, s.ReadOnly)}
 	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})
@@ -638,6 +643,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		} else if st.Steps%10 == 0 {
 			last.Content += fmt.Sprintf("\n\n[qh: step %d of %d]", st.Steps, limit)
 		}
+		if tools.BG != nil {
+			last.Content += tools.BG.Exits()
+		}
 		if st.Steps%todoEvery == 0 || todoDue {
 			last.Content += todoReminder(s.Todo)
 			todoDue = false
@@ -668,6 +676,10 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		}
 		for _, c := range skippedChecks {
 			st.Checks = append(st.Checks, "qh check skipped (not a command qh runs): "+c)
+		}
+		if stopped := tools.BG.Close(); len(stopped) > 0 {
+			st.Checks = append(st.Checks, "qh stopped the background commands still running at the end: "+strings.Join(stopped, ", "))
+			emit(Event{T: "info", Text: "stopped background commands: " + strings.Join(stopped, ", ")})
 		}
 	}
 	st.Todo = todoOpen(s.Todo)
