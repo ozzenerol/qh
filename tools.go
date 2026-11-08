@@ -141,15 +141,26 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		}
 		p, _ := s("path")
 		c, _ := s("content")
-		fp := t.path(p)
-		if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
-			return "error: " + err.Error(), false
-		}
-		if err := os.WriteFile(fp, []byte(c), 0o644); err != nil {
-			return "error: " + err.Error(), false
-		}
-		return fmt.Sprintf("wrote %s (%d lines)", p, strings.Count(c, "\n")+1), true
+		return t.write(t.path(p), p, c)
 	case "edit":
+		// Names other agents use for the same fields.
+		for alias, k := range map[string]string{"old_string": "old", "new_string": "new", "old_text": "old", "new_text": "new",
+			"oldText": "old", "newText": "new", "search": "old", "replace": "new", "file_path": "path", "file": "path"} {
+			if _, ok := args[k]; !ok && args[alias] != nil {
+				args[k] = args[alias]
+			}
+		}
+		if _, hasOld := s("old"); !hasOld {
+			if c, ok := s("content"); ok {
+				// edit with a whole file in content: that is a write.
+				if e := need("path"); e != "" {
+					return e + `. Call write {"path": "...", "content": "..."}.`, false
+				}
+				p, _ := s("path")
+				out, ok := t.write(t.path(p), p, c)
+				return "note: edit got content and no old, so qh wrote the whole file; use write for that.\n" + out, ok
+			}
+		}
 		p, hasPath := s("path")
 		o, _ := s("old")
 		note := ""
@@ -275,6 +286,16 @@ func (t *Tools) read(fp string, off, limit int) (string, bool) {
 		fmt.Fprintf(&out, "[lines %d-%d of %d; use offset=%d for more]\n", off, end, len(lines), end+1)
 	}
 	return out.String(), true
+}
+
+func (t *Tools) write(fp, shown, c string) (string, bool) {
+	if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
+		return "error: " + err.Error(), false
+	}
+	if err := os.WriteFile(fp, []byte(c), 0o644); err != nil {
+		return "error: " + err.Error(), false
+	}
+	return fmt.Sprintf("wrote %s (%d lines)", shown, strings.Count(c, "\n")+1), true
 }
 
 func (t *Tools) edit(fp, shown, old, nw string, all bool) (string, bool) {

@@ -484,6 +484,13 @@ func TestEditHelpers(t *testing.T) {
 	if out, ok := tl.Run(ctx, "edit", `{"old":"spring:","new":"x"}`); ok || !strings.Contains(out, "a.yml") || !strings.Contains(out, "b.yml") {
 		t.Fatalf("two files: %s", out)
 	}
+	// other names for the fields, and edit with content is a write
+	if out, ok := tl.Run(ctx, "edit", `{"file_path":"b.yml","old_string":"name: b","new_string":"name: c"}`); !ok {
+		t.Fatalf("aliases: %s", out)
+	}
+	if out, ok := tl.Run(ctx, "edit", `{"path":"c.txt","content":"hi\n"}`); !ok || !strings.Contains(out, "wrote c.txt") {
+		t.Fatalf("content: %s", out)
+	}
 	// old not found: the closest lines come back with numbers
 	out, ok := tl.Run(ctx, "edit", `{"path":"a.yml","old":"spring:\n  name: a\n  port: 9","new":"x"}`)
 	if ok || !strings.Contains(out, "2 of the 3 lines") || !strings.Contains(out, "3\t  port: 2") {
