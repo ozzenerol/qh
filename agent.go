@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1442,7 +1443,12 @@ func unusedImports(path, src string) []string {
 type expect struct {
 	empty bool   // "prints nothing", "is empty"
 	none  string // "shows no .bak file": no line may contain this
+	times int    // "x4", "4 times": every run must pass
 }
+
+var expTimes = regexp.MustCompile(`(?i)^\s*(?:(?:x|×)\s*(\d+)\b|(\d+|two|three|four|five|ten)\s+times\b)`)
+
+var timesWords = map[string]int{"two": 2, "three": 3, "four": 4, "five": 5, "ten": 10}
 
 var (
 	expEmpty = regexp.MustCompile(`(?i)^\s*(?:\)\s*)?(?:shows|prints|lists|outputs|returns|gives|is|are)\s+(?:nothing|empty|no output|no lines)`)
@@ -1465,10 +1471,25 @@ func checkExpects(prompt string) map[string]expect {
 		}
 		cmd := strings.TrimSpace(part[a+1 : a+1+b])
 		part = part[a+b+2:]
-		if expEmpty.MatchString(part) {
-			out[cmd] = expect{empty: true}
-		} else if m := expNone.FindStringSubmatch(part); m != nil {
-			out[cmd] = expect{none: strings.TrimRight(m[1], ".")}
+		var e expect
+		rest := part
+		if m := expTimes.FindStringSubmatch(part); m != nil {
+			n := m[1] + m[2]
+			if v, err := strconv.Atoi(n); err == nil {
+				e.times = v
+			} else {
+				e.times = timesWords[strings.ToLower(n)]
+			}
+			e.times = min(e.times, 10)
+			rest = part[len(m[0]):]
+		}
+		if expEmpty.MatchString(rest) {
+			e.empty = true
+		} else if m := expNone.FindStringSubmatch(rest); m != nil {
+			e.none = strings.TrimRight(m[1], ".")
+		}
+		if e != (expect{}) {
+			out[cmd] = e
 		}
 	}
 	return out
@@ -1539,6 +1560,36 @@ func (a *Agent) runChecks(ctx context.Context, tools *Tools, cmds []string, exps
 			}
 		}
 		emit(Event{T: "result", Tool: "check", OK: ok, Text: summary})
+		if ok && exp.times > 1 {
+			passed := 1
+			for i := 2; i <= exp.times && ok; i++ {
+				emit(Event{T: "tool", Tool: "check", Text: fmt.Sprintf("%s (run %d of %d)", c, i, exp.times)})
+				args, _ := json.Marshal(map[string]any{"command": rerunCmd(c), "timeout": 900})
+				o, k := tools.Run(ctx, "bash", string(args))
+				if k {
+					if why := exp.miss(o); why != "" {
+						k, o = false, why+"\n\n"+o
+					}
+				}
+				emit(Event{T: "result", Tool: "check", OK: k, Text: firstLine(o)})
+				if k {
+					passed++
+				} else {
+					ok, out = false, o
+				}
+			}
+			if !ok {
+				st.Checks = append(st.Checks, fmt.Sprintf("qh check FAILED (passed %d of %d runs): %s", passed, exp.times, c))
+				tail := out
+				if len(tail) > 3000 {
+					tail = tail[len(tail)-3000:]
+				}
+				fails = append(fails, fmt.Sprintf("`%s` must pass %d times in a row; it passed %d, then failed:\n%s", c, exp.times, passed, tail))
+				continue
+			}
+			st.Checks = append(st.Checks, fmt.Sprintf("qh check passed %d of %d runs: %s", passed, exp.times, c))
+			continue
+		}
 		if ok && rerun && testCmd.MatchString(c) && !printOnly(c) {
 			again := rerunCmd(c)
 			emit(Event{T: "tool", Tool: "check", Text: again + " (again, the run changed tests)"})

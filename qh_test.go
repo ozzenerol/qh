@@ -1136,3 +1136,22 @@ func TestRerunCmd(t *testing.T) {
 		t.Fatal("rerunCmd")
 	}
 }
+
+func TestCheckTimes(t *testing.T) {
+	e := checkExpects("Do it.\n\nDone when: `./gradlew :a:test` x4 passes, `go test ./...` 3 times in a row, and `git diff --stat` four times prints nothing.")
+	if e["./gradlew :a:test"].times != 4 || e["go test ./..."].times != 3 || e["git diff --stat"].times != 4 || !e["git diff --stat"].empty {
+		t.Fatalf("%+v", e)
+	}
+}
+
+func TestCheckTimesRun(t *testing.T) {
+	dir := t.TempDir()
+	a := &Agent{Cfg: Config{}}
+	tools := &Tools{Cwd: dir}
+	st := &Stats{}
+	cmd := "n=$(cat c 2>/dev/null || echo 0); n=$((n+1)); echo $n > c; [ $n -lt 2 ]"
+	msg := a.runChecks(context.Background(), tools, []string{cmd}, map[string]expect{cmd: {times: 3}}, false, false, st, func(Event) {})
+	if !strings.Contains(msg, "passed 1, then failed") || !strings.HasPrefix(st.Checks[0], "qh check FAILED (passed 1 of 3 runs)") {
+		t.Fatalf("%q %q", msg, st.Checks)
+	}
+}
