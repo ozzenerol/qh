@@ -946,3 +946,17 @@ func TestNegativeRules(t *testing.T) {
 		t.Fatalf("too much: %q", got)
 	}
 }
+
+func TestCheckSpans(t *testing.T) {
+	p := "Done when: `go test ./...` passes, `grep -n foo a.kt` finds nothing, `ls -la` is fine and `any()` is gone"
+	cmds, skipped := checkSpans(p)
+	if len(cmds) != 2 || cmds[1] != "grep -n foo a.kt" {
+		t.Fatalf("cmds %q", cmds)
+	}
+	if len(skipped) != 1 || skipped[0] != "ls -la" {
+		t.Fatalf("skipped %q", skipped)
+	}
+	if v := checkVerdict([]string{"qh check passed: a", "qh check skipped (not a command qh runs): ls -la"}); !strings.Contains(v, "1 not run") {
+		t.Fatal(v)
+	}
+}

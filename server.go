@@ -580,20 +580,26 @@ func onOff(b bool) string {
 // checkVerdict is one line for the top of the report, so a reader sees what
 // qh measured before what the model claims.
 func checkVerdict(lines []string) string {
-	pass, fail := 0, 0
+	pass, fail, skip := 0, 0, 0
 	for _, l := range lines {
 		switch {
+		case strings.HasPrefix(l, "qh check skipped"):
+			skip++
 		case strings.HasPrefix(l, "qh check passed"):
 			pass++
 		case strings.HasPrefix(l, "qh check FAILED"):
 			fail++
 		}
 	}
+	sk := ""
+	if skip > 0 {
+		sk = fmt.Sprintf("; %d not run, check them yourself", skip)
+	}
 	switch {
 	case pass+fail == 0:
-		return "qh: no Done-when checks ran (see the qh lines at the end)"
+		return "qh: no Done-when checks ran" + sk + " (see the qh lines at the end)"
 	case fail == 0:
-		return fmt.Sprintf("qh: all %d Done-when checks passed after the run (trust this over the report below)", pass)
+		return fmt.Sprintf("qh: all %d Done-when checks passed after the run%s (trust this over the report below)", pass, sk)
 	}
-	return fmt.Sprintf("qh: %d of %d Done-when checks FAILED after the run (see the end of the report)", fail, pass+fail)
+	return fmt.Sprintf("qh: %d of %d Done-when checks FAILED after the run%s (see the end of the report)", fail, pass+fail, sk)
 }

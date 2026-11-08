@@ -215,10 +215,18 @@ func doneWhen(prompt string) string {
 	return ""
 }
 
-var checkTools = []string{"./", "go ", "make", "npm ", "pnpm ", "yarn ", "mvn ", "gradle ", "cargo ", "pytest", "python", "uv ", "node ", "bun ", "deno ", "swift ", "dotnet ", "bash ", "sh ", "ctest", "cmake "}
+var checkTools = []string{"grep ", "! grep ", "rg ", "! rg ", "test ", "[ ", "diff ", "cmp ", "git diff", "git status", "wc ", "jq ", "curl ", "./", "go ", "make", "npm ", "pnpm ", "yarn ", "mvn ", "gradle ", "cargo ", "pytest", "python", "uv ", "node ", "bun ", "deno ", "swift ", "dotnet ", "bash ", "sh ", "ctest", "cmake "}
 
 // checkCommands finds the commands in backticks in the "Done when" part.
 func checkCommands(prompt string) []string {
+	cmds, _ := checkSpans(prompt)
+	return cmds
+}
+
+// checkSpans splits the backticked spans of the "Done when" part into the
+// commands qh runs and the ones that look like commands (their first word is
+// a program on PATH) but are not on the list, so the report can say so.
+func checkSpans(prompt string) (cmds, skipped []string) {
 	part := doneWhen(prompt)
 	var out []string
 	for {
@@ -232,14 +240,21 @@ func checkCommands(prompt string) []string {
 		}
 		cmd := strings.TrimSpace(part[a+1 : a+1+b])
 		part = part[a+b+2:]
+		ok := false
 		for _, p := range checkTools {
 			if strings.HasPrefix(cmd, p) {
 				out = append(out, cmd)
+				ok = true
 				break
 			}
 		}
+		if f := strings.Fields(cmd); !ok && len(f) > 1 {
+			if _, err := exec.LookPath(f[0]); err == nil {
+				skipped = append(skipped, cmd)
+			}
+		}
 	}
-	return out
+	return out, skipped
 }
 
 const systemPrompt = `You are a coding agent. You work in %s on %s. Your tools are read, write, edit and bash.
@@ -397,11 +412,12 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	told := false
 	ended := false // the model gave its final answer
 	selfChecked := doneWhen(prompt) == ""
-	checks := checkCommands(prompt)
+	checks, skippedChecks := checkSpans(prompt)
 	checked := s.ReadOnly
 	changed := map[string]bool{} // files that write and edit changed in this run
 	digs := 0                    // library-digging commands since the last change
 	nudges := 0                  // times the model was told to stop digging
+	editFile, editRun := "", 0   // edits in a row on one file
 	lastErrs := ""               // the compiler errors of the last failed build
 	fixTurn := false             // the model got one turn to fix failed checks
 	wantClean := noWarnings.MatchString(prompt)
@@ -514,6 +530,20 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				}
 				lastErrs = e
 			}
+			if tc.Function.Name == "edit" && ok {
+				var pa struct{ Path string }
+				json.Unmarshal([]byte(tc.Function.Arguments), &pa)
+				if pa.Path == editFile {
+					editRun++
+				} else {
+					editFile, editRun = pa.Path, 1
+				}
+				if editRun == 5 {
+					out += "\n\n[qh: that is 5 edits in a row on this file. For many small changes in one file, write the whole file once, or make them with one sed or perl command.]"
+				}
+			} else if tc.Function.Name != "read" {
+				editFile, editRun = "", 0
+			}
 			switch {
 			case tc.Function.Name == "write" || tc.Function.Name == "edit":
 				digs = 0
@@ -581,6 +611,11 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		a.limitReport(ctx, s, system, schemas, emit, &told)
 		if !checked {
 			a.finalChecks(ctx, tools, checks, changed, wantClean, true, &st, emit)
+		}
+	}
+	if !s.ReadOnly {
+		for _, c := range skippedChecks {
+			st.Checks = append(st.Checks, "qh check skipped (not a command qh runs): "+c)
 		}
 	}
 	st.Secs = time.Since(t0).Seconds()
