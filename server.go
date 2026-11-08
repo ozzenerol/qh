@@ -10,11 +10,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -127,9 +129,19 @@ func serve() error {
 	os.Chmod(sp, 0o600)
 	s := &Server{cfg: loadConfig(), sessions: map[string]*Session{}, stop: make(chan struct{}), gate: make(chan struct{}, 1)}
 	log.Printf("qh %s listening on %s, model server %s", version, sp, s.cfg.URL)
+	defer killAllBG()
 	go func() {
 		<-s.stop
 		ln.Close()
+	}()
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	defer signal.Stop(sig)
+	go func() {
+		<-sig
+		killAllBG()
+		os.Remove(sp)
+		os.Exit(1)
 	}()
 	for {
 		c, err := ln.Accept()

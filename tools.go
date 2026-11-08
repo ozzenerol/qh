@@ -50,7 +50,10 @@ func toolSchemas(readOnly bool) []map[string]any {
 			map[string]any{"path": str("file path"), "old": str("exact text to replace"), "new": str("replacement text"),
 				"all": map[string]any{"type": "boolean", "description": "replace every occurrence"}}, "path", "old", "new"),
 		fn("bash", "Run a shell command in the working directory. Use it for git, builds and tests.",
-			map[string]any{"command": str("the command"), "timeout": num("seconds, default 120, max 900")}, "command"),
+			map[string]any{"command": str("the command"), "timeout": num("seconds, default 120, max 900"),
+				"background": map[string]any{"type": "boolean", "description": "start a server or watcher and return at once with an id"}}, "command"),
+		fn("bg", "Read the new output of a background command, or stop it.",
+			map[string]any{"id": str("id from bash, like bg1"), "action": map[string]any{"type": "string", "enum": []string{"read", "stop"}}}, "id", "action"),
 		grep,
 		fn("glob", "Find files by path pattern, like src/**/*Test.kt. Returns at most 200 paths.",
 			map[string]any{"pattern": str("glob pattern; ** matches any directories"), "path": str("directory, default .")}, "pattern"),
@@ -65,6 +68,7 @@ type Tools struct {
 	Diag        map[string]string    // file extension -> checker command run after a write or edit
 	DiagTimeout time.Duration        // per check
 	Seen        map[string]*fileSeen // path -> what qh last showed the model of it
+	BG          *BG                  // background commands of the run; nil means none allowed
 }
 
 func (t *Tools) path(p string) string {
@@ -118,7 +122,7 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		return ""
 	}
 
-	if t.ReadOnly && (name == "write" || name == "edit" || name == "bash") {
+	if t.ReadOnly && (name == "write" || name == "edit" || name == "bash" || name == "bg") {
 		return "error: this is a read-only run; the tools are read, grep and ls", false
 	}
 	switch name {
@@ -247,14 +251,30 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		if to <= 0 || to > 900 {
 			to = 900
 		}
+		if args["background"] == true || args["background"] == "true" {
+			if t.BG == nil {
+				return "error: background commands are not available here", false
+			}
+			return t.BG.Start(t.Cwd, c)
+		}
 		before := t.mtimes()
 		defer t.refreshChanged(before)
 		return t.bash(ctx, c, time.Duration(to)*time.Second)
+	case "bg":
+		if t.BG == nil {
+			return "error: background commands are not available here", false
+		}
+		if e := need("id"); e != "" {
+			return e, false
+		}
+		id, _ := s("id")
+		act, _ := s("action")
+		return t.BG.Run(strings.TrimSpace(id), strings.TrimSpace(act))
 	}
 	if t.ReadOnly {
 		return fmt.Sprintf("error: unknown tool %q; the tools are read, grep and ls", name), false
 	}
-	return fmt.Sprintf("error: unknown tool %q; the tools are read, write, edit, bash, grep, glob, todo", name), false
+	return fmt.Sprintf("error: unknown tool %q; the tools are read, write, edit, bash, bg, grep, glob, todo", name), false
 }
 
 func (t *Tools) ls(p string) (string, bool) {
