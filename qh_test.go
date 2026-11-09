@@ -1279,3 +1279,40 @@ func TestNullAndWipeAsserts(t *testing.T) {
 		t.Fatal("false positive")
 	}
 }
+
+func TestShortResult(t *testing.T) {
+	for _, c := range []struct {
+		tool, args, out string
+		ok              bool
+		want            string
+	}{
+		{"read", `{"path":"a.go"}`, "1\tpackage main\n2\t\n3\tfunc x() {}\n", true, "3 lines"},
+		{"read", `{"path":"a.go"}`, "1\ta\n2\tb\n[lines 1-2 of 900; use offset=3 for more]\n", true, "1-2 of 900"},
+		{"grep", `{}`, "a.go:1:x\nb.go:4:x\n", true, "2 hits"},
+		{"edit", `{"path":"a.go","old":"a\nb","new":"c"}`, "edited a.go at line 1 (1 replacement(s))", true, "+1 −2"},
+		{"write", `{}`, "wrote a.go (10 lines; vs before: 3 lines added, 1 removed)", true, "+3 −1"},
+		{"bash", `{}`, "boom\n[exit 2]", false, "exit 2"},
+		{"bash", `{}`, "ok\n[exit 0]", true, "ok"},
+	} {
+		if got := shortResult(c.tool, c.args, c.out, c.ok); got != c.want {
+			t.Errorf("%s %q: got %q, want %q", c.tool, c.out, got, c.want)
+		}
+	}
+}
+
+func TestDeleteSession(t *testing.T) {
+	t.Setenv("QH_HOME", t.TempDir())
+	d, _ := qhDir()
+	os.MkdirAll(filepath.Join(d, "sessions"), 0o700)
+	os.WriteFile(filepath.Join(d, "sessions", "old.json"), []byte(`{"msgs":[]}`), 0o600)
+	s := &Server{sessions: map[string]*Session{}, chats: []chatReg{{from: "chat:1", session: "open"}}}
+	if e := s.deleteSession("open"); e.T != "error" {
+		t.Fatal("deleted a session open in a chat")
+	}
+	if e := s.deleteSession("old"); e.T != "done" {
+		t.Fatal(e.Text)
+	}
+	if _, err := os.Stat(filepath.Join(d, "sessions", "old.json")); err == nil {
+		t.Fatal("file still there")
+	}
+}

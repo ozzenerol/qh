@@ -187,6 +187,35 @@ func (s *Server) session(name, cwd string) (*Session, error) {
 	return ss, nil
 }
 
+// deleteSession removes a session file. A session with a run in progress or
+// an open chat stays.
+func (s *Server) deleteSession(name string) Event {
+	if !validName.MatchString(name) {
+		return Event{T: "error", Text: fmt.Sprintf("bad session name %q", name)}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.chats {
+		if c.session == name {
+			return Event{T: "error", Text: name + " is open in a chat"}
+		}
+	}
+	if ss, ok := s.sessions[name]; ok {
+		if run, _ := ss.state(); run {
+			return Event{T: "error", Text: name + " is running"}
+		}
+		delete(s.sessions, name)
+	}
+	d, err := qhDir()
+	if err != nil {
+		return Event{T: "error", Text: err.Error()}
+	}
+	if err := os.Remove(filepath.Join(d, "sessions", name+".json")); err != nil {
+		return Event{T: "error", Text: err.Error()}
+	}
+	return Event{T: "done", Text: "deleted " + name}
+}
+
 func (s *Server) save(ss *Session) {
 	d, err := qhDir()
 	if err != nil {
@@ -286,6 +315,8 @@ func (s *Server) handle(c net.Conn) {
 		s.run(c, r, req, emit)
 	case "attach":
 		s.attach(r, req, emit)
+	case "delete":
+		emit(s.deleteSession(req.Session))
 	case "cancel":
 		ss, err := s.session(req.Session, req.Cwd)
 		if err != nil {
@@ -496,6 +527,7 @@ func (s *Server) attach(r *bufio.Reader, req ClientReq, emit func(Event)) {
 
 func replay(msgs []Message) []Event {
 	var out []Event
+	args := map[string]string{} // tool call id -> arguments
 	for _, m := range msgs {
 		switch m.Role {
 		case "user":
@@ -514,11 +546,12 @@ func replay(msgs []Message) []Event {
 				out = append(out, Event{T: "text", Text: strings.TrimSpace(m.Content), Replay: true})
 			}
 			for _, tc := range m.ToolCalls {
+				args[tc.ID] = tc.Function.Arguments
 				out = append(out, Event{T: "tool", Tool: tc.Function.Name, Text: argSummary(tc.Function.Name, tc.Function.Arguments), Replay: true})
 			}
 		case "tool":
 			ok := !strings.HasPrefix(m.Content, "error:") && !strings.Contains(m.Content, "[exit ") || strings.Contains(m.Content, "[exit 0]")
-			out = append(out, Event{T: "result", Tool: m.Name, OK: ok, Text: firstLine(m.Content), Replay: true})
+			out = append(out, Event{T: "result", Tool: m.Name, OK: ok, Text: firstLine(m.Content), Short: shortResult(m.Name, args[m.ToolCallID], m.Content, ok), Replay: true})
 		}
 	}
 	return out
@@ -535,6 +568,7 @@ type SessionInfo struct {
 	Step    int       `json:"step"`
 	Waiting bool      `json:"waiting"`
 	From    string    `json:"from,omitempty"` // who started the run in progress
+	By      string    `json:"by,omitempty"`   // who sent the first message: "chat:PID", "opus", "qh run"
 	Cwd     string    `json:"cwd"`
 	First   string    `json:"first"` // the first user message
 	Last    string    `json:"last"`  // the last user message
@@ -570,6 +604,7 @@ func (s *Server) sessionList() []SessionInfo {
 			}
 			if m.Role == "user" {
 				if r.First == "" {
+					r.By = m.From
 					r.First = oneLine(m.Content, 200)
 				}
 				r.Last = oneLine(m.Content, 200)

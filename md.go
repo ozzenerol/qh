@@ -17,6 +17,9 @@ const (
 	cRed    = "\x1b[38;5;167m"
 	cCode   = "\x1b[38;5;110m"
 	cUser   = "\x1b[38;5;252m"
+	cYou    = "\x1b[38;5;179m" // speaker tags in the chat
+	cQwen   = "\x1b[38;5;73m"
+	cOpus   = "\x1b[38;5;176m"
 )
 
 // inline renders **bold**, `code` and *italic* in one line of Markdown.

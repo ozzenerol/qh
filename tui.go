@@ -45,6 +45,7 @@ func helpLines() []string {
 		{"↑ ↓", "history"},
 		{"/", "commands"},
 		{"ctrl+t", "show or hide the thinking"},
+		{"ctrl+r", "sessions: open, delete, clear finished runs"},
 		{"ctrl+o", "show or hide the last compaction summary"},
 		{"ctrl+l", "clear the screen"},
 		{"ctrl+c ×2", "quit"},
@@ -85,7 +86,7 @@ func (t *tui) sugs() []slashCmd {
 	return out
 }
 
-var spinFrames = []string{"·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"}
+var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 type tui struct {
 	out     *os.File
@@ -107,18 +108,26 @@ type tui struct {
 	escTimer *time.Timer
 
 	// the run that the session shows now
-	running   bool
-	runFrom   string
-	runStart  time.Time
-	thinkN    int
-	tool      string // tool that runs now, already formatted
-	textPart  string
-	thinkPart string
-	inMsg     bool
-	inThink   bool
-	md        mdState
-	showThink bool
-	frame     int
+	running      bool
+	runFrom      string
+	runStart     time.Time
+	thinkN       int
+	tool         string // tool that runs now, already formatted
+	textPart     string
+	thinkPart    string
+	inMsg        bool
+	qwenShown    bool // the "qwen" tag of this turn is printed
+	lastKind     string
+	thoughtN     int // thinking chars since the last folded line
+	thoughtStart time.Time
+	toolName     string
+	toolArg      string
+	toolStart    time.Time
+	budget       int // think_budget, for the meter
+	inThink      bool
+	md           mdState
+	showThink    bool
+	frame        int
 
 	model       string
 	ctx         int
@@ -232,7 +241,22 @@ func (t *tui) label(from string) string {
 	return from
 }
 
-func (t *tui) inner() int { return max(20, t.width-2) }
+// The transcript has a gutter of gw columns: a speaker tag on the first line
+// of a turn ("you", "qwen", "opus"), spaces after it.
+const gw = 6
+
+func tag(name, color string) string {
+	return " " + color + cBold + name + cReset + strings.Repeat(" ", max(1, gw-1-utf8.RuneCountInString(name)))
+}
+
+// qwenPrefix is the gutter for the next line of the model's turn.
+func (t *tui) qwenPrefix() string {
+	if !t.qwenShown {
+		t.qwenShown = true
+		return tag("qwen", cQwen)
+	}
+	return strings.Repeat(" ", gw)
+}
 
 // flushText prints the complete lines of streamed answer text.
 func (t *tui) flushText(all bool) {
@@ -258,19 +282,17 @@ func (t *tui) flushText(all bool) {
 }
 
 func (t *tui) textLine(line string) {
-	prefix := "  "
 	if !t.inMsg {
-		t.print("")
-		prefix = cUser + "● " + cReset
+		if t.qwenShown {
+			t.print("")
+		}
 		t.inMsg = true
 		t.md = mdState{}
 	}
+	t.lastKind = "text"
 	rendered := t.md.line(line)
-	for i, l := range wrap(rendered, t.width-3) {
-		if i > 0 {
-			prefix = "  "
-		}
-		t.print(prefix + l)
+	for _, l := range wrap(rendered, t.width-gw-1) {
+		t.print(t.qwenPrefix() + l)
 	}
 }
 
@@ -292,19 +314,22 @@ func (t *tui) flushThink(all bool) {
 		if !t.inThink && strings.TrimSpace(line) == "" {
 			continue
 		}
-		prefix := "  "
-		if !t.inThink {
-			t.print("")
-			prefix = cGray + "✻ " + cReset
-			t.inThink = true
-		}
-		for i, l := range wrap(line, t.width-3) {
-			if i > 0 {
-				prefix = "  "
-			}
-			t.print(prefix + cGray + cItalic + l)
+		t.inThink = true
+		for _, l := range wrap(line, t.width-gw-3) {
+			t.print(t.qwenPrefix() + cGray + "∴ " + cItalic + l)
 		}
 	}
+}
+
+// endThought prints the folded line of the thinking that just ended, when the
+// thinking is hidden.
+func (t *tui) endThought() {
+	if t.thoughtN > 0 && !t.showThink {
+		secs := time.Since(t.thoughtStart).Seconds()
+		t.lastKind = "thought"
+		t.print(t.qwenPrefix() + cGray + fmt.Sprintf("∴ thought for %.0fs · %s chars", secs, human(t.thoughtN)))
+	}
+	t.thoughtN = 0
 }
 
 func (t *tui) endMessage() {
@@ -313,18 +338,22 @@ func (t *tui) endMessage() {
 	t.inMsg, t.inThink = false, false
 }
 
+func speaker(lab string) (string, string) {
+	if lab == "" {
+		return "you", cYou
+	}
+	return lab, cOpus
+}
+
 func (t *tui) userLines(from, text string) []string {
-	lab := t.label(from)
+	name, col := speaker(t.label(from))
 	var out []string
 	first := true
 	for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
-		for _, wl := range wrap(l, t.width-4) {
-			p := cGray + "  "
+		for _, wl := range wrap(l, t.width-gw-1) {
+			p := strings.Repeat(" ", gw)
 			if first {
-				p = cGray + "> "
-				if lab != "" {
-					p = cAccent + lab + cReset + cGray + " > "
-				}
+				p = tag(name, col)
 				first = false
 			}
 			out = append(out, p+cUser+wl)
@@ -333,12 +362,49 @@ func (t *tui) userLines(from, text string) []string {
 	return out
 }
 
+func secs(ms int) string {
+	if ms < 100 {
+		return "0.0s"
+	}
+	if ms < 60000 {
+		return fmt.Sprintf("%.1fs", float64(ms)/1000)
+	}
+	return fmt.Sprintf("%dm%02ds", ms/60000, ms/1000%60)
+}
+
+// callLine is one tool call as a single line: name, target, result, time.
+func (t *tui) callLine(tool, arg, short string, ok bool, ms int) string {
+	name, res := cQwen+padRight(tool, 6)+cReset, cGray
+	if !ok {
+		name, res = cRed+padRight(tool, 6)+cReset, cRed
+	}
+	if strings.HasPrefix(short, "+") && ok {
+		if i := strings.Index(short, " −"); i > 0 {
+			short = cGreen + short[:i] + " " + cRed + short[i+1:] + cReset
+		}
+	}
+	tail := res + padRight(short, 12) + cReset
+	if ms > 0 {
+		tail += cGray + " " + secs(ms)
+	}
+	argW := max(10, t.width-1-gw-2-7-20)
+	return t.qwenPrefix() + cFrame + "├ " + cReset + name + " " + padRight(clipCols(arg, argW), argW) + cReset + " " + tail
+}
+
+// padRight pads s with spaces to w visible columns.
+func padRight(s string, w int) string {
+	return s + strings.Repeat(" ", max(0, w-visible(s)))
+}
+
 func (t *tui) event(e Event) {
 	switch e.T {
 	case "user":
 		t.endMessage()
+		t.endThought()
+		t.qwenShown, t.lastKind = false, ""
 		t.print("")
 		t.print(t.userLines(e.From, e.Text)...)
+		t.print("")
 		if !e.Replay {
 			t.running, t.runFrom, t.runStart, t.thinkN, t.tool = true, e.From, time.Now(), 0, ""
 		}
@@ -347,11 +413,15 @@ func (t *tui) event(e Event) {
 		if lab == "" {
 			lab = "you"
 		}
-		t.print(cGray + "  ◦ queued (" + lab + "): " + oneLine(e.Text, t.width-20))
+		t.print(cGray + strings.Repeat(" ", gw) + "◦ queued (" + lab + "): " + oneLine(e.Text, t.width-gw-20))
 	case "dropped":
-		t.print(cGray + "  ◦ dropped: " + oneLine(e.Text, t.width-16))
+		t.print(cGray + strings.Repeat(" ", gw) + "◦ dropped: " + oneLine(e.Text, t.width-gw-16))
 	case "thinking":
+		if t.thoughtN == 0 {
+			t.thoughtStart = time.Now()
+		}
 		t.thinkN += len(e.Text)
+		t.thoughtN += len(e.Text)
 		if t.showThink {
 			t.thinkPart += e.Text
 			t.flushThink(false)
@@ -361,6 +431,7 @@ func (t *tui) event(e Event) {
 			t.flushThink(true)
 			t.inThink = false
 		}
+		t.endThought()
 		t.textPart += e.Text
 		if e.Replay {
 			t.textPart += "\n"
@@ -374,38 +445,48 @@ func (t *tui) event(e Event) {
 			return // shown with its result
 		}
 		t.endMessage()
-		t.tool = cBold + displayName(e.Tool) + cReset + cGray + "(" + oneLine(e.Text, t.width-20) + ")" + cReset
-		if e.Replay {
-			return
+		t.endThought()
+		if t.lastWasText() {
+			t.print("")
 		}
+		t.toolName, t.toolArg, t.toolStart = e.Tool, oneLine(e.Text, 200), time.Now()
+		t.tool = e.Tool
 	case "result":
 		if e.Sub {
 			mark := cGray + "·"
 			if !e.OK {
 				mark = cRed + "·"
 			}
-			t.print(mark + cReset + cGray + "    " + displayName(e.Tool) + " " + oneLine(e.Text, t.width-20) + cReset)
+			t.print(strings.Repeat(" ", gw) + cFrame + "│ " + mark + cReset + cGray + " " + e.Tool + " " + oneLine(e.Text, t.width-gw-16) + cReset)
 			return
 		}
-		dot := cGreen + "●"
-		if !e.OK {
-			dot = cRed + "●"
+		arg := t.toolArg
+		if t.toolName != e.Tool {
+			arg = ""
 		}
-		head := t.tool
-		if head == "" {
-			head = cBold + displayName(e.Tool) + cReset
+		short := e.Short
+		if short == "" {
+			short = "ok"
+			if !e.OK {
+				short = "failed"
+			}
 		}
-		t.print("", dot+cReset+" "+head, cGray+"  ⎿  "+oneLine(e.Text, t.width-8))
-		t.tool = ""
+		t.print(t.callLine(e.Tool, arg, short, e.OK, e.Ms))
+		if !e.OK && e.Text != "" {
+			t.print(strings.Repeat(" ", gw) + cFrame + "│  " + cRed + oneLine(e.Text, t.width-gw-5))
+		}
+		t.tool, t.toolName, t.toolArg = "", "", ""
 		t.thinkN = 0
+		t.lastKind = "call"
 	case "info":
 		t.endMessage()
-		t.print(cGray + "  ⎿  " + e.Text)
+		t.print(cGray + strings.Repeat(" ", gw) + "· " + e.Text)
 	case "error":
 		t.endMessage()
-		t.print(cRed + "  ⎿  " + e.Text)
+		t.print(cRed + strings.Repeat(" ", gw) + "· " + e.Text)
 	case "done":
 		t.endMessage()
+		t.endThought()
 		t.running, t.tool = false, ""
 		t.compacting = false
 		if st := e.Stats; st != nil {
@@ -429,10 +510,10 @@ func (t *tui) event(e Event) {
 		t.compacting = false
 		t.lastSummary = e.Text
 		if e.Replay {
-			t.print("", cGray+"✻ Earlier messages were compacted · ctrl+o shows the summary")
+			t.print("", cGray+"  ∴ earlier messages were compacted · ctrl+o shows the summary")
 			return
 		}
-		t.print("", cAccent+"✻ "+cReset+cBold+"Conversation compacted"+cReset+cGray+
+		t.print("", cAccent+"  ∴ "+cReset+cBold+"Conversation compacted"+cReset+cGray+
 			fmt.Sprintf(" (~%s → ~%s tokens · ctrl+o shows the summary)", human(e.Before), human(e.After)))
 		t.ctx = e.After
 	case "attached":
@@ -443,7 +524,16 @@ func (t *tui) event(e Event) {
 	}
 }
 
+// lastWasText tells if the line above is answer text, so a tool call after it
+// gets a blank line first.
+func (t *tui) lastWasText() bool {
+	return t.lastKind == "text"
+}
+
 func human(n int) string {
+	if n >= 10000 {
+		return fmt.Sprintf("%dk", (n+500)/1000)
+	}
 	if n >= 1000 {
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	}
@@ -451,6 +541,14 @@ func human(n int) string {
 }
 
 // draw writes the live area: the spinner, the input box and the status line.
+func meter(n, of, cells int) string {
+	f := 0
+	if of > 0 {
+		f = min(cells, n*cells/of)
+	}
+	return cAccent + strings.Repeat("▮", f) + cFrame + strings.Repeat("▮", cells-f) + cReset
+}
+
 func (t *tui) draw() {
 	if t.picker != nil {
 		rows := t.pickerRows()
@@ -462,45 +560,51 @@ func (t *tui) draw() {
 		rows = append(rows, t.summaryPanel()...)
 	}
 	if t.textPart != "" {
-		pre := "  "
-		if !t.inMsg {
-			pre = cUser + "● " + cReset
+		p := strings.Repeat(" ", gw)
+		if !t.qwenShown {
+			p = tag("qwen", cQwen)
 		}
-		ls := wrap(t.md.line(t.textPart), t.width-3)
-		for i, l := range ls {
+		for i, l := range wrap(t.md.line(t.textPart), t.width-gw-1) {
 			if i > 0 {
-				pre = "  "
+				p = strings.Repeat(" ", gw)
 			}
-			rows = append(rows, pre+l)
+			rows = append(rows, p+l)
 		}
 	}
 	if t.running {
-		secs := int(time.Since(t.runStart).Seconds())
-		verb := "Thinking"
-		if t.compacting {
-			verb = "Compacting the conversation"
-		} else if t.tool != "" {
-			verb = "Running " + t.tool + cAccent
-		} else if t.textPart != "" || t.inMsg {
-			verb = "Writing"
-		}
-		detail := fmt.Sprintf("%ds", secs)
-		if t.thinkN > 0 && t.tool == "" {
-			detail += " · " + human(t.thinkN) + " chars of thinking"
+		spin := cAccent + spinFrames[t.frame%len(spinFrames)] + cReset
+		el := int(time.Since(t.runStart).Seconds())
+		var line string
+		switch {
+		case t.compacting:
+			line = spin + " " + cAccent + "compacting the conversation" + cGray + fmt.Sprintf(" %ds", el)
+		case t.tool != "":
+			ts := int(time.Since(t.toolStart).Seconds())
+			line = spin + " " + cQwen + padRight(t.toolName, 6) + cReset + " " + oneLine(t.toolArg, max(10, t.width-gw-40)) + cGray + fmt.Sprintf("  %ds", ts)
+		case t.textPart != "" || t.inMsg:
+			line = spin + " " + cAccent + "writing" + cGray + fmt.Sprintf(" %ds", el)
+		default:
+			line = spin + " " + cAccent + "thinking" + cGray + fmt.Sprintf(" %ds", el)
+			if t.thinkN > 0 {
+				b := t.budget
+				if b <= 0 {
+					b = 30000
+				}
+				line += fmt.Sprintf(" · %s of %s ", human(t.thinkN), human(b)) + cAccent + "▕" +
+					strings.Repeat("█", min(12, t.thinkN*12/b)) + cFrame + strings.Repeat("░", 12-min(12, t.thinkN*12/b)) + cAccent + "▏" + cGray
+			}
 		}
 		if lab := t.label(t.runFrom); lab != "" {
-			detail += " · for " + lab
+			line += " · for " + lab
 		}
-		detail += " · esc to interrupt"
-		rows = append(rows, "", clipCols(cAccent+spinFrames[t.frame%len(spinFrames)]+" "+verb+"…"+cReset+cGray+" ("+detail+")", t.width-1))
+		line += " · esc stops"
+		rows = append(rows, "", clipCols(strings.Repeat(" ", gw)+line, t.width-1))
 	}
 	rows = append(rows, "")
 
-	// input box
-	iw := t.width - 7 // "│ > " + text + " │" fills width-1 columns
-	if iw < 10 {
-		iw = 10
-	}
+	// input between two rules
+	const pw = 3 // " › "
+	iw := max(10, t.width-pw-2)
 	var vis [][]rune
 	line := []rune{}
 	curRow, curCol, col := 0, 0, 0
@@ -532,45 +636,52 @@ func (t *tui) draw() {
 		}
 	}
 	vis = append(vis, line)
+	rule := cFrame + strings.Repeat("─", t.width-1)
 	top := len(rows)
-	rows = append(rows, cFrame+"╭"+strings.Repeat("─", t.width-3)+"╮")
+	rows = append(rows, rule)
 	for i, v := range vis {
-		p := "  "
+		p := "   "
 		if i == 0 {
-			p = cBold + "> " + cReset
+			p = " " + cYou + cBold + "›" + cReset + " "
 		}
 		txt := string(v)
-		pad := iw - utf8.RuneCountInString(txt)
-		rows = append(rows, cFrame+"│ "+cReset+p+txt+strings.Repeat(" ", max(0, pad))+cFrame+" │")
+		if i == 0 && len(t.buf) == 0 && t.running {
+			if lab := t.label(t.runFrom); lab != "" {
+				txt = cGray + clipCols("watching "+lab+" · what you type now is queued for after this run", iw)
+			}
+		}
+		rows = append(rows, p+txt)
 	}
-	rows = append(rows, cFrame+"╰"+strings.Repeat("─", t.width-3)+"╯")
+	rows = append(rows, rule)
 
-	left := "  " + t.session + " · " + clipLeft(shortPath(t.cwd), max(10, t.width/2-10))
+	left := " " + t.session
 	if t.notice != "" {
-		left = "  " + t.notice
+		left = " " + t.notice
 	}
-	right := ""
-	if t.model != "" {
-		right = strings.TrimSuffix(t.model, "-8bit")
-		right = strings.TrimSuffix(right, "-5bit")
-		right += " · ctx " + human(t.ctx)
+	right := cRed + "● " + cGray + "not connected"
+	if t.attached {
+		right = cGreen + "● " + cGray
+		if t.model != "" {
+			m := strings.TrimSuffix(strings.TrimSuffix(t.model, "-8bit"), "-5bit")
+			if i := strings.LastIndex(m, "/"); i >= 0 {
+				m = m[i+1:]
+			}
+			right += m + " · "
+		}
+		right += "ctx " + human(t.ctx)
 		if t.window > 0 {
-			right += fmt.Sprintf("/%s (%d%%)", human(t.window), t.ctx*100/t.window)
+			right += "/" + human(t.window) + " " + meter(t.ctx, t.window, 8) + cGray + fmt.Sprintf(" %d%%", t.ctx*100/t.window)
 		}
 		if t.lastTS != "" {
 			right += " · " + t.lastTS
 		}
 	}
-	if !t.attached {
-		right = "not connected"
-	}
-	// When both halves do not fit on one line, the right half (model, ctx,
-	// tok/s) gets its own line instead of being dropped.
+	// When both halves do not fit on one line, the right half gets its own line.
 	status := []string{left}
-	if gap := t.width - 1 - visible(left) - visible(right) - 2; gap > 0 {
+	if gap := t.width - 1 - visible(left) - visible(right) - 1; gap > 0 {
 		status[0] += strings.Repeat(" ", gap) + right
-	} else if right != "" {
-		status = append(status, "  "+right)
+	} else {
+		status = append(status, " "+right)
 	}
 	if sg := t.sugs(); len(sg) > 0 {
 		for i, c := range sg {
@@ -587,7 +698,7 @@ func (t *tui) draw() {
 		}
 	}
 
-	t.emitLive(rows, top+1+curRow, 4+curCol)
+	t.emitLive(rows, top+1+curRow, pw+curCol)
 }
 
 // clipLeft keeps the end of s, which is the useful part of a path.
@@ -632,21 +743,9 @@ func shortPath(p string) string {
 }
 
 func (t *tui) header() {
-	w := min(t.width-1, 60)
-	in := w - 4
-	line := func(s string) string {
-		s = clipCols(s, in)
-		pad := in - visible(s)
-		return cFrame + "│ " + cReset + s + strings.Repeat(" ", max(0, pad)) + cFrame + " │"
-	}
 	t.print(
-		cFrame+"╭"+strings.Repeat("─", w-2)+"╮",
-		line(cAccent+"✻"+cReset+" "+cBold+"qh"+cReset+" "+version),
-		line(""),
-		line(cGray+"session "+t.session),
-		line(cGray+"cwd "+clipLeft(shortPath(t.cwd), in-4)),
-		line(cGray+"/ for commands · esc stops an answer · ctrl+t thinking"),
-		cFrame+"╰"+strings.Repeat("─", w-2)+"╯",
+		" "+cQwen+cBold+"qh"+cReset+cGray+" "+version+cFrame+" · "+cReset+t.session+cFrame+" · "+cGray+clipLeft(shortPath(t.cwd), max(10, t.width-30)),
+		cGray+clipCols(" / commands · esc stops · ctrl+r sessions · ctrl+t thinking · ctrl+o summary", t.width-1),
 	)
 }
 
@@ -966,6 +1065,12 @@ func (t *tui) key(r rune) uiAction {
 			break
 		}
 		t.showSummary = !t.showSummary
+	case 0x12:
+		if t.running {
+			t.notice = "a run is active; stop it first (esc)"
+		} else {
+			t.picker = newPicker(t.session)
+		}
 	case 0x14:
 		t.showThink = !t.showThink
 		t.notice = "thinking " + map[bool]string{true: "shown", false: "hidden"}[t.showThink]
@@ -982,15 +1087,22 @@ func (t *tui) key(r rune) uiAction {
 // session picker ---------------------------------------------------------------
 
 type picker struct {
-	rows []SessionInfo
-	sel  int
+	rows    []SessionInfo
+	sel     int
+	current string // the session of this chat, never deleted from here
+	cfg     Config
+	note    string
+}
+
+func newPicker(current string) *picker {
+	return &picker{rows: nonEmpty(listSessionsReq()), current: current, cfg: loadConfig()}
 }
 
 func ago(t time.Time) string {
 	d := time.Since(t)
 	switch {
 	case d < time.Minute:
-		return "just now"
+		return "now"
 	case d < time.Hour:
 		return fmt.Sprintf("%dm ago", int(d.Minutes()))
 	case d < 48*time.Hour:
@@ -999,29 +1111,96 @@ func ago(t time.Time) string {
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
+// byLabel is who started a session, in a word.
+func byLabel(by string) string {
+	switch {
+	case by == "", by == "chat", strings.HasPrefix(by, "chat:"):
+		return "chat"
+	case by == "qh run":
+		return "run"
+	}
+	return by
+}
+
+func (p *picker) state(r SessionInfo) string {
+	switch {
+	case r.Running && r.Waiting:
+		return cGray + "queued"
+	case r.Running:
+		return cAccent + "RUNNING"
+	}
+	at := p.cfg.CompactAt
+	if at <= 0 {
+		at = p.cfg.Context * 8 / 10
+	}
+	if at > 0 && r.Ctx*10 >= at*9 {
+		return cYou + "compacts soon"
+	}
+	return ""
+}
+
 func (t *tui) pickerRows() []string {
 	p := t.picker
-	rows := []string{"", cBold + "Resume a session" + cReset}
+	w := t.width - 1
+	rows := []string{"", clipCols(" "+cBold+"Sessions"+cReset+cGray+"  ↑↓ move · enter open · d delete · x delete finished runs · esc back", w)}
 	if len(p.rows) == 0 {
-		return append(rows, cGray+"  no saved sessions", "", cGray+"  esc to go back")
+		return append(rows, cGray+"   no saved sessions", "")
 	}
+	rows = append(rows, cGray+clipCols("   "+padRight("name", 18)+padRight("by", 7)+padRight("turns", 7)+padRight("ctx", 13)+padRight("last", 10)+"state", w))
+	window := max(1, p.cfg.Context)
 	const show = 10
 	start := max(0, min(p.sel-show/2, len(p.rows)-show))
 	for i := start; i < min(len(p.rows), start+show); i++ {
 		r := p.rows[i]
-		mark, style := "  ", ""
+		mark, style := "   ", ""
 		if i == p.sel {
-			mark, style = cAccent+"❯ ", cBold
+			mark, style = " "+cAccent+"❯"+cReset+" ", cBold
 		}
-		msg := r.Last
-		if msg == "" {
-			msg = "(empty)"
+		by := byLabel(r.By)
+		byc := cUser
+		if by != "chat" {
+			byc = cOpus
 		}
-		meta := fmt.Sprintf("%s · %d msgs · %s", ago(r.Updated), r.Msgs, clipLeft(shortPath(r.Cwd), 30))
-		rows = append(rows, clipCols(mark+style+r.Name+cReset+"  "+msg, t.width-1),
-			clipCols("    "+cGray+meta, t.width-1))
+		name := r.Name
+		if name == p.current {
+			name += "*"
+		}
+		ctx := fmt.Sprintf("%-6s %3d%%", human(r.Ctx), r.Ctx*100/window)
+		rows = append(rows, clipCols(mark+style+padRight(clipCols(name, 17), 18)+cReset+byc+padRight(by, 7)+cReset+
+			padRight(fmt.Sprint(r.Turns), 7)+padRight(ctx, 13)+cGray+padRight(ago(r.Updated), 10)+p.state(r), w))
 	}
-	return append(rows, "", cGray+"  ↑↓ select · enter resume · esc cancel")
+	if more := len(p.rows) - min(len(p.rows), start+show); more > 0 || start > 0 {
+		rows = append(rows, cGray+fmt.Sprintf("   %d of %d shown", min(show, len(p.rows)), len(p.rows)))
+	}
+	r := p.rows[p.sel]
+	rows = append(rows, "", cFrame+" ── "+r.Name+" "+strings.Repeat("─", max(0, w-5-utf8.RuneCountInString(r.Name))))
+	if r.First != "" {
+		rows = append(rows, clipCols(" "+cGray+"first "+cReset+r.First, w))
+	}
+	if r.Last != "" && r.Last != r.First {
+		rows = append(rows, clipCols(" "+cGray+"last  "+cReset+r.Last, w))
+	}
+	rows = append(rows, clipCols(" "+cGray+shortPath(r.Cwd), w))
+	if p.note != "" {
+		rows = append(rows, " "+cGray+p.note)
+	}
+	return rows
+}
+
+func deleteReq(name string) error {
+	c, dec, err := send(ClientReq{Op: "delete", Session: name})
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	var e Event
+	if err := dec.Decode(&e); err != nil {
+		return err
+	}
+	if e.T == "error" {
+		return fmt.Errorf("%s", e.Text)
+	}
+	return nil
 }
 
 // pickKey handles a key in the picker. It returns the chosen session, or
@@ -1045,11 +1224,48 @@ func (t *tui) pickKey(b []byte) (name string, done bool) {
 				return p.rows[p.sel].Name, true
 			}
 			return "", true
+		case "d":
+			if len(p.rows) == 0 {
+				break
+			}
+			r := p.rows[p.sel]
+			if r.Name == p.current {
+				p.note = "this chat uses " + r.Name
+				break
+			}
+			if err := deleteReq(r.Name); err != nil {
+				p.note = err.Error()
+				break
+			}
+			p.note = "deleted " + r.Name
+			p.reload()
+		case "x":
+			n, kept := 0, 0
+			for _, r := range p.rows {
+				if byLabel(r.By) == "chat" || r.Running || r.Name == p.current {
+					continue
+				}
+				if deleteReq(r.Name) == nil {
+					n++
+				} else {
+					kept++
+				}
+			}
+			p.note = fmt.Sprintf("deleted %s", plural(n, "finished run"))
+			if kept > 0 {
+				p.note += fmt.Sprintf(", %d in use", kept)
+			}
+			p.reload()
 		case "\x1b", "q", "\x03":
 			return "", true
 		}
 	}
 	return "", false
+}
+
+func (p *picker) reload() {
+	p.rows = nonEmpty(listSessionsReq())
+	p.sel = min(p.sel, max(0, len(p.rows)-1))
 }
 
 func listSessionsReq() []SessionInfo {
@@ -1113,6 +1329,14 @@ func (t *tui) switchTo(name string, events chan genEvent) {
 	t.session = name
 	t.running, t.tool, t.textPart, t.thinkPart, t.inMsg, t.inThink = false, "", "", "", false, false
 	t.ctx, t.lastTS, t.attached = 0, "", false
+	for _, r := range listSessionsReq() {
+		if r.Name == name {
+			t.ctx = r.Ctx
+		}
+	}
+	if t.window == 0 {
+		t.window = loadConfig().Context
+	}
 	t.clearLive()
 	t.w("\x1b[2J\x1b[H")
 	t.header()
@@ -1130,7 +1354,7 @@ func chatTUI(session string, pick bool) error {
 		return chatPlain(session)
 	}
 	t := &tui{out: os.Stdout, width: termWidth(int(os.Stdout.Fd())), session: session, cwd: cwd,
-		me: fmt.Sprintf("chat:%d", os.Getpid())}
+		me: fmt.Sprintf("chat:%d", os.Getpid()), budget: loadConfig().ThinkBudget}
 	t.w("\x1b[?2004h") // bracketed paste
 	defer func() {
 		t.clearLive()
@@ -1155,7 +1379,7 @@ func chatTUI(session string, pick bool) error {
 	events := make(chan genEvent, 1024)
 	quitOnPickerEsc := false
 	if pick {
-		t.picker = &picker{rows: nonEmpty(listSessionsReq())}
+		t.picker = newPicker(t.session)
 		quitOnPickerEsc = true
 	} else {
 		t.switchTo(session, events)
@@ -1292,7 +1516,7 @@ func (t *tui) submit() bool {
 			t.notice = "a run is active; stop it first (esc)"
 			return false
 		}
-		t.picker = &picker{rows: nonEmpty(listSessionsReq())}
+		t.picker = newPicker(t.session)
 		return false
 	case text == "/sessions":
 		c, dec, err := send(ClientReq{Op: "sessions"})

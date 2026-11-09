@@ -154,6 +154,8 @@ type Event struct {
 	OK     bool   `json:"ok,omitempty"`
 	Sub    bool   `json:"sub,omitempty"` // a tool call of an explore sub-run
 	Stats  *Stats `json:"stats,omitempty"`
+	Short  string `json:"short,omitempty"` // result: a few words, for the one-line view
+	Ms     int    `json:"ms,omitempty"`    // result: how long the call took
 }
 
 type Agent struct {
@@ -612,6 +614,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			key := tc.Function.Name + "\x00" + normArgs(tc.Function.Arguments)
 			seen[key]++
 			emit(Event{T: "tool", Tool: tc.Function.Name, Text: argSummary(tc.Function.Name, tc.Function.Arguments)})
+			callStart := time.Now()
 			var out string
 			var ok bool
 			if nudges >= 2 && tc.Function.Name == "bash" && libDig.MatchString(tc.Function.Arguments) {
@@ -712,7 +715,8 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			if !ok {
 				summary = failLine(out)
 			}
-			emit(Event{T: "result", Tool: tc.Function.Name, OK: ok, Text: summary})
+			emit(Event{T: "result", Tool: tc.Function.Name, OK: ok, Text: summary,
+				Short: shortResult(tc.Function.Name, tc.Function.Arguments, out, ok), Ms: int(time.Since(callStart).Milliseconds())})
 			if !s.ReadOnly && a.exploreOn() {
 				out += nudge.after(tc.Function.Name, tc.Function.Arguments, s.LastPrompt)
 			}

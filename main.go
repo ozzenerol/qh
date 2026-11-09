@@ -29,6 +29,7 @@ usage:
   qh -r [name]                 pick a session to resume, or resume NAME
   qh run [flags] "task"        run one task and print the report (task "-" reads stdin)
   qh sessions                  list the sessions
+  qh top                       live view of every daemon (~/.qh, ~/.qh-*) and its runs
   qh wait [-s session] [-q]    wait for the run on a session to end, then print its report and stats
   qh compact [-s session] [focus]  replace the history with a summary
   qh reset [-s session]        clear a session
@@ -81,6 +82,8 @@ func main() {
 		err = waitCmd(*name, *q)
 	case "sessions":
 		err = simple(ClientReq{Op: "sessions"})
+	case "top":
+		err = topCmd()
 	case "compact":
 		fs := flag.NewFlagSet("compact", flag.ExitOnError)
 		name := fs.String("s", "main", "session")
