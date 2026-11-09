@@ -478,6 +478,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	changed := map[string]bool{} // files that write and edit changed in this run
 	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Seen: s.seen, Changed: changed}
 	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
+	tools.Confine, tools.ReadRoots = a.Cfg.confine()
 	if !s.ReadOnly {
 		tools.BG = newBG()
 		defer tools.BG.Close()

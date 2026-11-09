@@ -41,6 +41,8 @@ type Config struct {
 	WarnIgnore   []string `json:"warn_ignore"`   // regular expressions of warning lines that the checks ignore
 	Explore      *bool    `json:"explore"`       // the explore tool; nil means on
 	ExploreSteps int      `json:"explore_steps"` // step limit of one explore sub-run; 0 means 15
+	Confine      *bool    `json:"confine"`       // file tools stay in the project; nil means on
+	ReadRoots    []string `json:"read_roots"`    // more folders read, grep, ls may use; nil means the dependency caches
 	FormatCfg
 	Repos map[string]FormatCfg `json:"repos"` // settings for one repo, by the folder name of its git root
 }
@@ -660,4 +662,26 @@ func checkVerdict(lines []string) string {
 		return fmt.Sprintf("qh: all %d Done-when checks passed after the run%s (trust this over the report below)", pass, sk)
 	}
 	return fmt.Sprintf("qh: %d of %d Done-when checks FAILED after the run%s (see the end of the report)", fail, pass+fail, sk)
+}
+
+// confine returns whether file tools stay in the project, and the extra
+// folders they may read. The default read roots are the dependency caches,
+// so a run can read library sources and jars.
+func (c Config) confine() (bool, []string) {
+	if c.Confine != nil && !*c.Confine {
+		return false, nil
+	}
+	roots := c.ReadRoots
+	if roots == nil {
+		roots = []string{"~/.m2/repository", "~/.gradle/caches", "~/go/pkg/mod", "/usr/local/go/src"}
+	}
+	h, _ := os.UserHomeDir()
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		if strings.HasPrefix(r, "~/") && h != "" {
+			r = filepath.Join(h, r[2:])
+		}
+		out = append(out, filepath.Clean(r))
+	}
+	return true, out
 }

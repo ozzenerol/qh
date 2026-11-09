@@ -78,6 +78,63 @@ type Tools struct {
 	Changed     map[string]bool      // files that write and edit changed, whatever the argument names were
 	LastPath    string               // the file of the last successful write or edit
 	Tests       []testCount          // the test counts qh added to bash results, in order
+
+	Confine   bool     // file tools stay in the project (the git root of Cwd, or Cwd)
+	ReadRoots []string // more folders that read, grep, ls and glob may use when confined
+}
+
+// projectRoot is the git root that holds dir, or dir when it is in no repo.
+func projectRoot(dir string) string {
+	for r := dir; ; r = filepath.Dir(r) {
+		if _, err := os.Stat(filepath.Join(r, ".git")); err == nil { // a folder, or a file in a worktree
+			return r
+		}
+		if r == filepath.Dir(r) {
+			return dir
+		}
+	}
+}
+
+// realPath resolves the symlinks of the longest part of p that exists.
+func realPath(p string) string {
+	rest := ""
+	for q := p; ; q = filepath.Dir(q) {
+		if r, err := filepath.EvalSymlinks(q); err == nil {
+			return filepath.Join(r, rest)
+		}
+		if q == filepath.Dir(q) {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(q), rest)
+	}
+}
+
+func within(p, root string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+}
+
+// outside returns an error for the model when a confined run's tool would use
+// a path outside the project, or "" when the path is fine.
+func (t *Tools) outside(name, p string) string {
+	if !t.Confine {
+		return ""
+	}
+	root := projectRoot(t.Cwd)
+	roots := []string{root}
+	if name != "write" && name != "edit" {
+		roots = append(roots, t.ReadRoots...)
+	}
+	rp := realPath(p)
+	for _, r := range roots {
+		if within(rp, realPath(r)) {
+			return ""
+		}
+	}
+	if len(roots) > 1 {
+		return fmt.Sprintf("error: %s is outside the project %s; %s may only use files under it and under %s. If you need something from elsewhere, say what in your answer.", p, root, name, strings.Join(roots[1:], ", "))
+	}
+	return fmt.Sprintf("error: %s is outside the project %s; %s may only change files under it.", p, root, name)
 }
 
 func (t *Tools) wrote(fp string) {
@@ -142,6 +199,21 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 
 	if t.ReadOnly && (name == "write" || name == "edit" || name == "bash" || name == "bg") {
 		return "error: this is a read-only run; the tools are read, grep and ls", false
+	}
+	switch name {
+	case "read", "ls", "grep", "find", "glob", "write", "edit":
+		p, _ := s("path")
+		for _, k := range []string{"file_path", "file"} {
+			if p == "" {
+				p, _ = s(k)
+			}
+		}
+		if p == "" {
+			p = "."
+		}
+		if e := t.outside(name, t.path(p)); e != "" {
+			return e, false
+		}
 	}
 	switch name {
 	case "find", "glob":

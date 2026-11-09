@@ -141,6 +141,8 @@ The server reuses its cache for the part of a request that matches an earlier on
   "warn_ignore": [],
   "explore": true,
   "explore_steps": 15,
+  "confine": true,
+  "read_roots": ["~/.m2/repository", "~/.gradle/caches", "~/go/pkg/mod", "/usr/local/go/src"],
   "sort_imports": false,
   "format": {".go": "gofmt -w"},
   "diagnostics": {".py": ""},
@@ -150,6 +152,8 @@ The server reuses its cache for the part of a request that matches an earlier on
 ```
 
 An empty `model` means the first model the server lists. `compact_at` 0 means 80% of `context`. `warn_ignore` holds regular expressions for compiler warning lines that the "Done when" checks should not count. Only compiler warnings count (Kotlin `w:`, `file:line: warning:`, Maven compiler `[WARNING] File.java:[l,c]`); JVM notices such as `WARNING: sun.misc.Unsafe` do not.
+
+The file tools (read, grep, ls, glob, write, edit) stay inside the project: the git root of the working directory, or the working directory when it is in no repo. read, grep, ls and glob may also use the `read_roots` folders, by default the Maven, Gradle and Go module caches and the Go sources, so a run can read library code. A path outside gets an error, and symlinks count by where they point. bash is not limited. `"confine": false` turns this off.
 
 After the model's final answer, qh can tidy the files the run wrote or edited, before the checks run. `sort_imports` sorts the imports of Kotlin files (IntelliJ layout: other packages, then `java`, `javax`, `kotlin`, then aliases) and Java files (static imports last). `format` maps a file extension to a command, and qh appends the changed files of that type. `repos` sets both for one repo, by the folder name of its git root. In Kotlin and Java files it always indents a declaration that sits at column 0 inside a class body, with the block that follows it (that compiles, so nothing else catches it). The report lists what qh changed. `QH_URL`, `QH_MODEL`, `QH_HOME` and `QH_SOCK` override the file.
 

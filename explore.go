@@ -71,6 +71,7 @@ func (a *Agent) explore(ctx context.Context, cwd, rawArgs string, st *Stats, emi
 	}
 	st.Explores++
 	tools := &Tools{Cwd: cwd, ReadOnly: true} // its own Seen: what the helper read, the run has not seen
+	tools.Confine, tools.ReadRoots = a.Cfg.confine()
 	schemas := exploreSchemas()
 	msgs := []Message{{Role: "system", Content: fmt.Sprintf(exploreSystem, cwd)}, {Role: "user", Content: q}}
 	answer := ""
