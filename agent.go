@@ -143,6 +143,8 @@ type Stats struct {
 	Facts        []string       `json:"facts,omitempty"`         // what qh saw the run do, and where the report differs
 	ThinkDropped int            `json:"think_dropped,omitempty"` // tokens of earlier turns' thinking removed at the start
 	Ctx          map[string]int `json:"ctx_by_tool,omitempty"`   // tokens (chars/4) of tool results in the context at the end, per tool
+	OutChars     map[string]int `json:"output_chars,omitempty"`  // characters the model wrote, by kind (outSplit)
+	QuietSteps   int            `json:"quiet_steps,omitempty"`   // steps asked with thinking off after a clean edit/write/todo step
 }
 
 type Event struct {
@@ -488,7 +490,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	s.runs++
 	changed := map[string]bool{} // files that write and edit changed in this run
 	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Web: s.Web, SearchURL: a.Cfg.SearchURL, Seen: s.seen, Changed: changed,
-		Snippet: a.Cfg.snippet(), GrepCtx: a.Cfg.grepCtx()}
+		Snippet: a.Cfg.snippet(), GrepCtx: a.Cfg.grepCtx(), WriteNote: a.Cfg.writeNote()}
 	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
 	tools.Confine, tools.ReadRoots = a.Cfg.confine()
 	if !s.ReadOnly {
@@ -531,6 +533,8 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	fixTurn := false            // the model got one turn to fix failed checks
 	wantClean := noWarnings.MatchString(prompt)
 	todoDue := false // remind the model of its open todo items after the next tool call
+	quiet := false   // the last step only made clean edits (quietStep)
+	st.OutChars = map[string]int{}
 	defer s.setState(false, 0)
 
 	// limit grows by passGrace for each pass that qh asks for after the
@@ -542,6 +546,12 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		st.Steps++
 		s.setState(true, st.Steps)
 		think := s.Think
+		if quiet && think && !a.Cfg.editThink() {
+			think = false
+			st.QuietSteps++
+		}
+		quiet = false
+		th0 := st.Thinking
 		var msg Message
 		var u Usage
 		var err error
@@ -593,6 +603,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		st.Prompt, st.Cached = u.PromptTokens, u.Details.CachedTokens
 		st.Fresh += u.PromptTokens - u.Details.CachedTokens
 		st.Output += u.CompletionTokens
+		outSplit(st.OutChars, msg, st.Thinking-th0)
 		s.LastPrompt = u.PromptTokens + u.CompletionTokens
 		s.Msgs = append(s.Msgs, msg)
 		if a.Save != nil {
@@ -624,6 +635,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			break
 		}
 		st.Calls += len(msg.ToolCalls)
+		var oks []bool
 		for _, tc := range msg.ToolCalls {
 			key := tc.Function.Name + "\x00" + normArgs(tc.Function.Arguments)
 			seen[key]++
@@ -735,6 +747,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 				out += nudge.after(tc.Function.Name, tc.Function.Arguments, s.LastPrompt)
 			}
 			s.Msgs = append(s.Msgs, Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name, Content: out})
+			oks = append(oks, ok)
 			if ctx.Err() != nil {
 				break
 			}
@@ -755,6 +768,13 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		if st.Steps%todoEvery == 0 || todoDue {
 			last.Content += todoReminder(s.Todo)
 			todoDue = false
+		}
+		if len(oks) == len(msg.ToolCalls) {
+			var outs []string
+			for _, m := range s.Msgs[len(s.Msgs)-len(oks):] {
+				outs = append(outs, m.Content)
+			}
+			quiet = quietStep(msg.ToolCalls, oks, outs)
 		}
 		if s.LastPrompt > a.compactAt() {
 			if err := a.Compact(ctx, s, "the task that is in progress now", emit); err != nil {

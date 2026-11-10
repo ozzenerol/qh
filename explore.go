@@ -49,6 +49,9 @@ func (a *Agent) systemExtra(readOnly bool) string {
 	if !readOnly && a.Cfg.batch() {
 		x += batchLine
 	}
+	if !readOnly {
+		x += reportLine(a.Cfg.reportLines())
+	}
 	return x
 }
 

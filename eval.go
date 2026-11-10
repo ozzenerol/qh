@@ -34,22 +34,24 @@ type EvalTask struct {
 }
 
 type EvalResult struct {
-	Task     string  `json:"task"`
-	Run      int     `json:"run"`
-	Pass     bool    `json:"pass"`
-	Steps    int     `json:"steps"`
-	Calls    int     `json:"calls,omitempty"`
-	ToolErrs int     `json:"tool_errors"`
-	CmdFails int     `json:"failed_commands,omitempty"` // counted in tool_errors before qh split them
-	Prompt   int     `json:"prompt_tokens"`             // the last request
-	Fresh    int     `json:"fresh_tokens"`              // prompt tokens the server did not have in its cache, all requests
-	Output   int     `json:"output_tokens"`
-	Secs     float64 `json:"secs"`
-	Limit    bool    `json:"step_limit,omitempty"`
-	Explores int     `json:"explore_runs,omitempty"`
-	ExpSteps int     `json:"explore_steps,omitempty"`
-	Error    string  `json:"error,omitempty"`
-	CheckOut string  `json:"check_output,omitempty"`
+	Task     string         `json:"task"`
+	Run      int            `json:"run"`
+	Pass     bool           `json:"pass"`
+	Steps    int            `json:"steps"`
+	Calls    int            `json:"calls,omitempty"`
+	ToolErrs int            `json:"tool_errors"`
+	CmdFails int            `json:"failed_commands,omitempty"` // counted in tool_errors before qh split them
+	Prompt   int            `json:"prompt_tokens"`             // the last request
+	Fresh    int            `json:"fresh_tokens"`              // prompt tokens the server did not have in its cache, all requests
+	Output   int            `json:"output_tokens"`
+	Secs     float64        `json:"secs"`
+	Limit    bool           `json:"step_limit,omitempty"`
+	Explores int            `json:"explore_runs,omitempty"`
+	ExpSteps int            `json:"explore_steps,omitempty"`
+	Error    string         `json:"error,omitempty"`
+	CheckOut string         `json:"check_output,omitempty"`
+	OutChars map[string]int `json:"output_chars,omitempty"` // characters written, by kind (outSplit)
+	Quiet    int            `json:"quiet_steps,omitempty"`
 }
 
 type EvalFile struct {
@@ -59,6 +61,7 @@ type EvalFile struct {
 	Model   string       `json:"model"`
 	Explore bool         `json:"explore"`
 	Steps   string       `json:"steps,omitempty"` // -steps on or off: the StepsCfg settings
+	Set     string       `json:"set,omitempty"`   // the -set options of the run
 	Results []EvalResult `json:"results"`
 }
 
@@ -166,6 +169,7 @@ func (a *Agent) runTask(ctx context.Context, t EvalTask, run int, timeout time.D
 	})
 	r.Calls = st.Calls
 	r.Explores, r.ExpSteps, r.CmdFails = st.Explores, st.ExploreSteps, st.CmdFails
+	r.OutChars, r.Quiet = st.OutChars, st.QuietSteps
 	r.Steps, r.ToolErrs, r.Prompt, r.Fresh, r.Output, r.Secs, r.Limit = st.Steps, st.ToolErrs, st.Prompt, st.Fresh, st.Output, st.Secs, st.Limit
 	if ctx.Err() != nil {
 		r.Error = "timeout"
@@ -275,6 +279,17 @@ type evalAgg struct {
 	secs                                float64
 }
 
+// evalSplit sums the output split of all results.
+func evalSplit(rs []EvalResult) map[string]int {
+	m := map[string]int{}
+	for _, r := range rs {
+		for k, v := range r.OutChars {
+			m[k] += v
+		}
+	}
+	return m
+}
+
 func aggregate(rs []EvalResult) (map[string]*evalAgg, []string) {
 	m := map[string]*evalAgg{}
 	var names []string
@@ -301,10 +316,10 @@ func aggregate(rs []EvalResult) (map[string]*evalAgg, []string) {
 
 func (g *evalAgg) String() string {
 	if g == nil {
-		return fmt.Sprintf("%-38s", "-")
+		return fmt.Sprintf("%-49s", "-")
 	}
 	n := float64(g.runs)
-	return fmt.Sprintf("%d/%d  st %5.1f  err %4.1f  fresh %6.0f  %4.0fs", g.pass, g.runs, float64(g.steps)/n, float64(g.errs)/n, float64(g.fresh)/n, g.secs/n)
+	return fmt.Sprintf("%d/%d  st %5.1f  err %4.1f  fresh %6.0f  out %5.0f  %4.0fs", g.pass, g.runs, float64(g.steps)/n, float64(g.errs)/n, float64(g.fresh)/n, float64(g.out)/n, g.secs/n)
 }
 
 // compareEval prints two result files side by side, per task (means per run).
@@ -333,7 +348,7 @@ func compareEval(w io.Writer, pa, pb string) error {
 		}
 	}
 	sort.Strings(names)
-	fmt.Fprintf(w, "A %s %s %s explore=%v\nB %s %s %s explore=%v\n", fa.Date, fa.Commit, fa.Model, fa.Explore, fb.Date, fb.Commit, fb.Model, fb.Explore)
+	fmt.Fprintf(w, "A %s %s %s explore=%v %s\nB %s %s %s explore=%v %s\n", fa.Date, fa.Commit, fa.Model, fa.Explore, fa.Set, fb.Date, fb.Commit, fb.Model, fb.Explore, fb.Set)
 	ta, tb := &evalAgg{}, &evalAgg{}
 	for _, n := range names {
 		fmt.Fprintf(w, "%-22s A %s | B %s\n", n, ma[n], mb[n])
@@ -344,11 +359,20 @@ func compareEval(w io.Writer, pa, pb string) error {
 				x.t.steps += x.g.steps
 				x.t.errs += x.g.errs
 				x.t.fresh += x.g.fresh
+				x.t.out += x.g.out
 				x.t.secs += x.g.secs
 			}
 		}
 	}
 	fmt.Fprintf(w, "%-22s A %s | B %s\n", "total", ta, tb)
+	for _, x := range []struct {
+		n string
+		f *EvalFile
+	}{{"A", &fa}, {"B", &fb}} {
+		if l := splitLine(evalSplit(x.f.Results)); l != "" {
+			fmt.Fprintf(w, "%s output: %s\n", x.n, l)
+		}
+	}
 	return nil
 }
 
@@ -363,6 +387,7 @@ func evalCmd(args []string) error {
 	noExplore := fset.Bool("noexplore", false, "turn the explore tool off (same as \"explore\": false in the config)")
 	steps := fset.String("steps", "", "on or off: turn batch_hint, edit_snippet and grep_context all on or off")
 	compare := fset.Bool("compare", false, "compare two result files: qh eval -compare A.json B.json")
+	set := fset.String("set", "", "config options for this run, like write_note=false,report_lines=0")
 	fset.Parse(args)
 	if *compare {
 		if fset.NArg() != 2 {
@@ -394,6 +419,9 @@ func evalCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	cfg := loadConfig()
+	if err := applySet(&cfg, *set); err != nil {
+		return err
+	}
 	llm := &LLM{BaseURL: cfg.URL, Model: cfg.Model, HTTP: &http.Client{}}
 	if err := llm.ResolveModel(ctx); err != nil {
 		return err
@@ -416,7 +444,7 @@ func evalCmd(args []string) error {
 	}
 	rs, err := a.runEval(ctx, tasks, names, *n, *timeout, os.Stdout, log)
 	if len(rs) > 0 {
-		p, werr := saveEval(EvalFile{Date: time.Now().Format(time.RFC3339), Version: version, Commit: buildCommit(), Model: filepath.Base(llm.Model), Explore: a.exploreOn(), Steps: *steps, Results: rs})
+		p, werr := saveEval(EvalFile{Date: time.Now().Format(time.RFC3339), Version: version, Commit: buildCommit(), Model: filepath.Base(llm.Model), Explore: a.exploreOn(), Steps: *steps, Set: *set, Results: rs})
 		if werr != nil {
 			return werr
 		}
@@ -426,6 +454,12 @@ func evalCmd(args []string) error {
 				pass++
 			}
 		}
+		out, secs := 0, 0.0
+		for _, r := range rs {
+			out += r.Output
+			secs += r.Secs
+		}
+		fmt.Printf("output: %d tokens, %.0fs; %s\n", out, secs, splitLine(evalSplit(rs)))
 		fmt.Printf("%d/%d passed; results in %s\n", pass, len(rs), p)
 	}
 	return err

@@ -122,11 +122,25 @@ qh eval -list
 qh eval -compare ~/.qh/eval/A.json ~/.qh/eval/B.json
 ```
 
-Each run prints one line: pass or fail, steps, failed tool calls (tool errors plus failed commands, as before they were split; the JSON has both), the size of the last request, fresh tokens (prompt tokens that the server did not have in its cache, summed over the requests), output tokens and seconds. The results go to `~/.qh/eval/DATE.json` with the version, the git commit of the build and the model. `-compare` prints the pass count and the means per task for both files. `-dir DIR` reads `.task` files from a folder, `-timeout` limits each task (20m by default), `-v` prints the tool calls, `-noexplore` turns explore off for the run, and `-steps on|off` sets `batch_hint`, `edit_snippet` and `grep_context` together (the JSON file records both). The line and the JSON also count tool calls. The eval sends its requests straight to the model server, not through the daemon, so it should run when no other run uses the model.
+Each run prints one line: pass or fail, steps, failed tool calls (tool errors plus failed commands, as before they were split; the JSON has both), the size of the last request, fresh tokens (prompt tokens that the server did not have in its cache, summed over the requests), output tokens and seconds. The results go to `~/.qh/eval/DATE.json` with the version, the git commit of the build and the model. `-compare` prints the pass count and the means per task for both files. `-dir DIR` reads `.task` files from a folder, `-timeout` limits each task (20m by default), `-v` prints the tool calls, `-noexplore` turns explore off for the run, `-steps on|off` sets `batch_hint`, `edit_snippet` and `grep_context` together, and `-set` sets config fields for the run (`-set write_note=false,report_lines=0`); the JSON file records all three. The line and the JSON also count tool calls. At the end it prints the output tokens, the seconds and where the output went (see Output tokens); `-compare` prints that split for both files. The eval sends its requests straight to the model server, not through the daemon, so it should run when no other run uses the model.
 
 ## Prompt cache
 
 The server reuses its cache for the part of a request that matches an earlier one from the start, so qh never changes a message once it was sent. Notes such as `[qh: step N of M]` go into the newest tool result before it is sent, and later hints come as new messages. The system prompt is built once per session and kept in the session file, so a run that edits `AGENTS.md` or adds a source folder does not change it; it is built again for a new or reset session, after compaction, when the folder or the read-only mode changes, and when a new qh build has other prompt templates or tools (so an older session gets the prompt that names its tools). When a run is stopped between tool calls, the next run first answers the open calls with "interrupted". A test (`TestPromptOnlyGrows`) runs two turns, a compaction and a third turn through a fake model and checks that each request starts with the exact messages of the one before; `TestMixedToolsPromptOnlyGrows` does the same for a run that uses todo, a background command, write, edit with diagnostics, explore and a repeated read.
+
+## Output tokens
+
+Writing is almost all of a run's time: one eval of 22 runs took 1061 s for 66,496 output tokens, 62.7 tok/s, so reading the prompt and the tools add little. `Stats.OutChars` (`output_chars` in the JSON) counts the characters the model wrote by kind: `think`, `text`, `edit.old`, `edit.new`, the rest of the edit arguments as `edit`, and the arguments of every other tool by its name.
+
+In the 54 sessions on the Mac (2026-11-10, 3779 answers, 6.2M characters) the split is think 41%, write 27%, text 8%, edit.new 5%, bash 5%, edit.old 5%, read 3%. Of the write characters, half (12.6% of all output) went to 148 writes that replaced an existing file, most of them to change a few lines: a 305-line test file rewritten for 1 line added and 1 removed. Thinking after a step that only wrote, edited or updated the todo list is 17% of all thinking (7% of output), with a median of 66 to 84 characters; thinking after read and bash results is 68% of it and stays on. The final reports have a median of 2079 characters.
+
+Three options cut the biggest parts:
+
+- `write_note` (true): when write replaces a file of 60 lines or more and changes less than a third of its lines, the result says so and tells the model to use edit. The write still goes through, so the tokens already spent are not lost.
+- `report_lines` (8): the system prompt asks for a final report under that many lines, without code or test output. 0 leaves it out.
+- `edit_think` (false): after a step whose calls were all write, edit or todo and all came back clean (no compiler errors, no qh note), the next request goes with thinking off. With `preserve_thinking` the template renders an empty thinking block for that answer, the same text as the generation prompt without thinking, so the prompt cache holds (`TestQuietThinkKeepsPrefix`). `true` thinks on every step. The stats count these steps as `quiet_steps`.
+
+Measured with `qh eval` on all 11 tasks, one run each (qwen36, 2026-11-10), all three off (`-set write_note=false,report_lines=0,edit_think=true`) and then the defaults: 11/11 pass both times; output 30,889 and 30,427 tokens, 489 s and 487 s. The text the model wrote (reports, self-check answers) fell from 29,059 to 21,362 characters, and 27 of 114 steps ran without thinking, but thinking as a whole went from 43,577 to 45,675 characters, within the spread of single runs (do-not-rule took 8 steps one time and 17 the other). The eval files are small, so `write_note` never fired there; it is aimed at the long rewrites in the Mac sessions.
 
 ## Config
 
@@ -152,6 +166,9 @@ The server reuses its cache for the part of a request that matches an earlier on
   "edit_snippet": true,
   "grep_context": true,
   "parallel": 1,
+  "write_note": true,
+  "report_lines": 8,
+  "edit_think": false,
   "sort_imports": false,
   "format": {".go": "gofmt -w"},
   "diagnostics": {".py": ""},
