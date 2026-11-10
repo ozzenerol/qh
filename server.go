@@ -46,6 +46,7 @@ type Config struct {
 	Web          bool     `json:"web"`           // new sessions get web_search and fetch_url
 	SearchURL    string   `json:"search_url"`    // SearXNG base URL for web_search, e.g. http://192.168.1.142:8080
 	FormatCfg
+	StepsCfg
 	Repos map[string]FormatCfg `json:"repos"` // settings for one repo, by the folder name of its git root
 }
 

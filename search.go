@@ -123,6 +123,7 @@ func (t *Tools) grep(ctx context.Context, pat, root, glob string, literal bool) 
 	glob = strings.TrimPrefix(filepath.ToSlash(glob), "./")
 	var b strings.Builder
 	n := 0
+	var hits []grepHit
 	err := t.walk(ctx, root, func(p, rel string) {
 		if glob != "" && !globMatch(glob, rel) {
 			return
@@ -134,10 +135,14 @@ func (t *Tools) grep(ctx context.Context, pat, root, glob string, literal bool) 
 		if err != nil || bytes.IndexByte(data[:min(len(data), 8000)], 0) >= 0 {
 			return // binary
 		}
-		for i, l := range bytes.Split(bytes.TrimSuffix(data, []byte("\n")), []byte("\n")) {
+		lines := bytes.Split(bytes.TrimSuffix(data, []byte("\n")), []byte("\n"))
+		for i, l := range lines {
 			l = bytes.TrimSuffix(l, []byte("\r"))
 			if !match(l) {
 				continue
+			}
+			if t.GrepCtx && n < grepCtxMax {
+				hits = append(hits, grepHit{rel, lines, i})
 			}
 			if n++; n <= grepMax {
 				txt := string(l)
@@ -153,6 +158,9 @@ func (t *Tools) grep(ctx context.Context, pat, root, glob string, literal bool) 
 	}
 	if n == 0 {
 		return "no matches", true
+	}
+	if t.GrepCtx && n <= grepCtxMax {
+		return grepWithContext(hits), true
 	}
 	if n > grepMax {
 		fmt.Fprintf(&b, "[%d more]\n", n-grepMax)

@@ -113,6 +113,7 @@ func (s *Session) cancelRun() bool {
 }
 
 type Stats struct {
+	Calls        int            `json:"calls,omitempty"` // tool calls of all steps
 	Model        string         `json:"model"`
 	Steps        int            `json:"steps"`
 	Prompt       int            `json:"prompt_tokens"`
@@ -479,7 +480,8 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	}
 	s.runs++
 	changed := map[string]bool{} // files that write and edit changed in this run
-	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Web: s.Web, SearchURL: a.Cfg.SearchURL, Seen: s.seen, Changed: changed}
+	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Web: s.Web, SearchURL: a.Cfg.SearchURL, Seen: s.seen, Changed: changed,
+		Snippet: a.Cfg.snippet(), GrepCtx: a.Cfg.grepCtx()}
 	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
 	tools.Confine, tools.ReadRoots = a.Cfg.confine()
 	if !s.ReadOnly {
@@ -614,6 +616,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 			ended = true
 			break
 		}
+		st.Calls += len(msg.ToolCalls)
 		for _, tc := range msg.ToolCalls {
 			key := tc.Function.Name + "\x00" + normArgs(tc.Function.Arguments)
 			seen[key]++

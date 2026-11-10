@@ -78,6 +78,8 @@ type Tools struct {
 	BG          *BG                  // background commands of the run; nil means none allowed
 	Undo        *Checkpoint          // the files this run changed, for qh undo; nil keeps nothing
 	Changed     map[string]bool      // files that write and edit changed, whatever the argument names were
+	Snippet     bool                 // edit returns the changed lines
+	GrepCtx     bool                 // grep with few matches returns lines around them
 	LastPath    string               // the file of the last successful write or edit
 	Tests       []testCount          // the test counts qh added to bash results, in order
 
@@ -588,7 +590,11 @@ func (t *Tools) edit(fp, shown, old, nw string, all bool, near int) (string, boo
 	}
 	t.saw(fp, src)
 	t.wrote(fp)
-	return fix + fmt.Sprintf("edited %s at line %d (%d replacement(s))", shown, line, max(1, cnt*boolInt(all))), true
+	out := fix + fmt.Sprintf("edited %s at line %d (%d replacement(s))", shown, line, max(1, cnt*boolInt(all)))
+	if t.Snippet && !all {
+		out += editSnippet(src, line, strings.Count(nw, "\n")+1)
+	}
+	return out, true
 }
 
 func boolInt(b bool) int {

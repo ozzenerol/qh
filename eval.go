@@ -38,6 +38,7 @@ type EvalResult struct {
 	Run      int     `json:"run"`
 	Pass     bool    `json:"pass"`
 	Steps    int     `json:"steps"`
+	Calls    int     `json:"calls,omitempty"`
 	ToolErrs int     `json:"tool_errors"`
 	CmdFails int     `json:"failed_commands,omitempty"` // counted in tool_errors before qh split them
 	Prompt   int     `json:"prompt_tokens"`             // the last request
@@ -57,6 +58,7 @@ type EvalFile struct {
 	Commit  string       `json:"commit,omitempty"`
 	Model   string       `json:"model"`
 	Explore bool         `json:"explore"`
+	Steps   string       `json:"steps,omitempty"` // -steps on or off: the StepsCfg settings
 	Results []EvalResult `json:"results"`
 }
 
@@ -162,6 +164,7 @@ func (a *Agent) runTask(ctx context.Context, t EvalTask, run int, timeout time.D
 			fmt.Fprintf(log, "  error: %s\n", e.Text)
 		}
 	})
+	r.Calls = st.Calls
 	r.Explores, r.ExpSteps, r.CmdFails = st.Explores, st.ExploreSteps, st.CmdFails
 	r.Steps, r.ToolErrs, r.Prompt, r.Fresh, r.Output, r.Secs, r.Limit = st.Steps, st.ToolErrs, st.Prompt, st.Fresh, st.Output, st.Secs, st.Limit
 	if ctx.Err() != nil {
@@ -222,8 +225,8 @@ func resultLine(r EvalResult) string {
 	if r.Explores > 0 {
 		extra += fmt.Sprintf("  explore %d/%d steps", r.Explores, r.ExpSteps)
 	}
-	return fmt.Sprintf("%s %-22s run %d  steps %3d  errs %2d  ctx %6d  fresh %7d  out %6d  %5.0fs%s",
-		v, r.Task, r.Run, r.Steps, r.ToolErrs+r.CmdFails, r.Prompt, r.Fresh, r.Output, r.Secs, extra)
+	return fmt.Sprintf("%s %-22s run %d  steps %3d  calls %3d  errs %2d  ctx %6d  fresh %7d  out %6d  %5.0fs%s",
+		v, r.Task, r.Run, r.Steps, r.Calls, r.ToolErrs+r.CmdFails, r.Prompt, r.Fresh, r.Output, r.Secs, extra)
 }
 
 // runEval runs the tasks (all, or the names in only) n times each and
@@ -358,6 +361,7 @@ func evalCmd(args []string) error {
 	verbose := fset.Bool("v", false, "print each tool call")
 	list := fset.Bool("list", false, "list the tasks")
 	noExplore := fset.Bool("noexplore", false, "turn the explore tool off (same as \"explore\": false in the config)")
+	steps := fset.String("steps", "", "on or off: turn batch_hint, edit_snippet and grep_context all on or off")
 	compare := fset.Bool("compare", false, "compare two result files: qh eval -compare A.json B.json")
 	fset.Parse(args)
 	if *compare {
@@ -398,6 +402,13 @@ func evalCmd(args []string) error {
 		off := false
 		cfg.Explore = &off
 	}
+	switch *steps {
+	case "":
+	case "on", "off":
+		cfg.setAll(*steps == "on")
+	default:
+		return fmt.Errorf("-steps takes on or off")
+	}
 	a := &Agent{LLM: llm, Cfg: cfg}
 	log := io.Discard
 	if *verbose {
@@ -405,7 +416,7 @@ func evalCmd(args []string) error {
 	}
 	rs, err := a.runEval(ctx, tasks, names, *n, *timeout, os.Stdout, log)
 	if len(rs) > 0 {
-		p, werr := saveEval(EvalFile{Date: time.Now().Format(time.RFC3339), Version: version, Commit: buildCommit(), Model: filepath.Base(llm.Model), Explore: a.exploreOn(), Results: rs})
+		p, werr := saveEval(EvalFile{Date: time.Now().Format(time.RFC3339), Version: version, Commit: buildCommit(), Model: filepath.Base(llm.Model), Explore: a.exploreOn(), Steps: *steps, Results: rs})
 		if werr != nil {
 			return werr
 		}

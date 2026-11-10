@@ -34,15 +34,22 @@ func (a *Agent) schemas(readOnly bool) []map[string]any {
 				"question": map[string]any{"type": "string", "description": "one concrete question"}}},
 		}})
 	}
+	if !readOnly && a.Cfg.batch() {
+		s = batchSchemas(s)
+	}
 	return s
 }
 
 // systemExtra is the text that the run adds to the session's system prompt.
 func (a *Agent) systemExtra(readOnly bool) string {
+	x := ""
 	if !readOnly && a.exploreOn() {
-		return exploreLine
+		x += exploreLine
 	}
-	return ""
+	if !readOnly && a.Cfg.batch() {
+		x += batchLine
+	}
+	return x
 }
 
 func exploreSchemas() []map[string]any {
@@ -70,7 +77,7 @@ func (a *Agent) explore(ctx context.Context, cwd, rawArgs string, st *Stats, emi
 		limit = 15
 	}
 	st.Explores++
-	tools := &Tools{Cwd: cwd, ReadOnly: true} // its own Seen: what the helper read, the run has not seen
+	tools := &Tools{Cwd: cwd, ReadOnly: true, GrepCtx: a.Cfg.grepCtx()} // its own Seen: what the helper read, the run has not seen
 	tools.Confine, tools.ReadRoots = a.Cfg.confine()
 	schemas := exploreSchemas()
 	msgs := []Message{{Role: "system", Content: fmt.Sprintf(exploreSystem, cwd)}, {Role: "user", Content: q}}
