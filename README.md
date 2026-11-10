@@ -140,7 +140,7 @@ Three options cut the biggest parts:
 - `report_lines` (8): the system prompt asks for a final report under that many lines, without code or test output. 0 leaves it out.
 - `edit_think` (false): after a step whose calls were all write, edit or todo and all came back clean (no compiler errors, no qh note), the next request goes with thinking off. With `preserve_thinking` the template renders an empty thinking block for that answer, the same text as the generation prompt without thinking, so the prompt cache holds (`TestQuietThinkKeepsPrefix`). `true` thinks on every step. The stats count these steps as `quiet_steps`.
 
-MEASURED
+Measured with `qh eval` on all 11 tasks, one run each (qwen36, 2026-11-10), all three off (`-set write_note=false,report_lines=0,edit_think=true`) and then the defaults: 11/11 pass both times; output 30,889 and 30,427 tokens, 489 s and 487 s. The text the model wrote (reports, self-check answers) fell from 29,059 to 21,362 characters, and 27 of 114 steps ran without thinking, but thinking as a whole went from 43,577 to 45,675 characters, within the spread of single runs (do-not-rule took 8 steps one time and 17 the other). The eval files are small, so `write_note` never fired there; it is aimed at the long rewrites in the Mac sessions.
 
 ## Config
 
