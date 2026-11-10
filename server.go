@@ -45,6 +45,7 @@ type Config struct {
 	ReadRoots    []string `json:"read_roots"`    // more folders read, grep, ls may use; nil means the dependency caches
 	Web          bool     `json:"web"`           // new sessions get web_search and fetch_url
 	SearchURL    string   `json:"search_url"`    // SearXNG base URL for web_search, e.g. http://192.168.1.142:8080
+	Parallel     int      `json:"parallel"`      // model requests at once across sessions; 0 means 1
 	FormatCfg
 	StepsCfg
 	Repos map[string]FormatCfg `json:"repos"` // settings for one repo, by the folder name of its git root
@@ -67,6 +68,13 @@ func sockPath() string {
 	}
 	d, _ := qhDir()
 	return filepath.Join(d, "qh.sock")
+}
+
+func (c Config) parallel() int {
+	if c.Parallel < 1 {
+		return 1
+	}
+	return c.Parallel
 }
 
 func loadConfig() Config {
@@ -112,7 +120,7 @@ type Server struct {
 	sessions map[string]*Session
 	chats    []chatReg // open terminal chats, the newest last
 	stop     chan struct{}
-	gate     chan struct{} // one model request at a time
+	gate     chan struct{} // Parallel model requests at a time
 }
 
 var validName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
@@ -136,7 +144,8 @@ func serve() error {
 		return err
 	}
 	os.Chmod(sp, 0o600)
-	s := &Server{cfg: loadConfig(), sessions: map[string]*Session{}, stop: make(chan struct{}), gate: make(chan struct{}, 1)}
+	cfg := loadConfig()
+	s := &Server{cfg: cfg, sessions: map[string]*Session{}, stop: make(chan struct{}), gate: make(chan struct{}, cfg.parallel())}
 	log.Printf("qh %s listening on %s, model server %s", version, sp, s.cfg.URL)
 	defer killAllBG()
 	go func() {

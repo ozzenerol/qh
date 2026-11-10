@@ -163,7 +163,7 @@ type Event struct {
 type Agent struct {
 	LLM  *LLM
 	Cfg  Config
-	Gate chan struct{} // one model request at a time across sessions; nil means no gate
+	Gate chan struct{} // its capacity is the model requests at once across sessions; nil means no gate
 	Save func()        // called after each step, so the session file stays current
 	Wait func(bool)    // called when a request starts and stops waiting at the gate
 
@@ -178,13 +178,20 @@ type Agent struct {
 }
 
 // timing splits where a run's model time went.
+func gateWaitText(n int) string {
+	if n <= 1 {
+		return "waiting for the model: a run of another session is using it"
+	}
+	return fmt.Sprintf("waiting for the model: %d requests of other runs are using it", n)
+}
+
 type timing struct {
 	prefill, gen, wait time.Duration
 	genTokens          int
 }
 
-// chat sends one request through the gate. The model server answers one
-// request at a time, so a run of another session waits here and says so once.
+// chat sends one request through the gate. When the gate is full (config
+// parallel, default 1), the run waits here and says so once.
 func (a *Agent) chat(ctx context.Context, r Request, onDelta func(Delta) bool, emit func(Event), told *bool) (Message, Usage, error) {
 	start := time.Now()
 	if a.Gate != nil {
@@ -192,7 +199,7 @@ func (a *Agent) chat(ctx context.Context, r Request, onDelta func(Delta) bool, e
 		case a.Gate <- struct{}{}:
 		default:
 			if !*told {
-				emit(Event{T: "info", Text: "waiting for the model: a run of another session is using it"})
+				emit(Event{T: "info", Text: gateWaitText(cap(a.Gate))})
 				*told = true
 			}
 			if a.Wait != nil {
