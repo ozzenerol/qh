@@ -24,6 +24,8 @@ const usage = `qh: a coding agent for a local Qwen model
 
 usage:
   qh                           chat in the terminal, in a new session
+  qh -i NAME ...               use instance NAME (~/.qh-NAME; "default" is ~/.qh) for any command
+  qh instances                 list the instances and their model servers
   qh -s NAME                   chat in session NAME
   qh -c                        continue the latest session of this folder
   qh -r [name]                 pick a session to resume, or resume NAME
@@ -59,12 +61,15 @@ Settings are in ~/.qh/config.json: url, model, max_steps, max_tokens, think_budg
 
 func main() {
 	log.SetFlags(log.LstdFlags)
-	args := os.Args[1:]
+	args, err := pickInstance(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "qh:", err)
+		os.Exit(2)
+	}
 	cmd := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
 	}
-	var err error
 	switch cmd {
 	case "":
 		err = chat(args)
@@ -115,6 +120,8 @@ func main() {
 		} else {
 			fmt.Println("qh is not running")
 		}
+	case "instances":
+		err = listInstances()
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	case "version":
@@ -601,4 +608,72 @@ func chatPlain(session string) error {
 		}
 		fmt.Println(v.dim(statLine(e.Stats)))
 	}
+}
+
+// pickInstance handles a leading -i NAME: it sets QH_HOME to ~/.qh-NAME
+// ("default" means ~/.qh) and returns the remaining args.
+func pickInstance(args []string) ([]string, error) {
+	if len(args) == 0 {
+		return args, nil
+	}
+	name := ""
+	switch {
+	case args[0] == "-i" || args[0] == "--instance":
+		if len(args) < 2 {
+			return nil, errors.New("-i needs an instance name (see qh instances)")
+		}
+		name, args = args[1], args[2:]
+	case strings.HasPrefix(args[0], "-i="):
+		name, args = strings.TrimPrefix(args[0], "-i="), args[1:]
+	default:
+		return args, nil
+	}
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(h, ".qh-"+name)
+	if name == "default" {
+		dir = filepath.Join(h, ".qh")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		return nil, fmt.Errorf("no instance %q: %s does not exist (see qh instances)", name, dir)
+	}
+	os.Setenv("QH_HOME", dir)
+	return args, nil
+}
+
+func listInstances() error {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	dirs, _ := filepath.Glob(filepath.Join(h, ".qh*"))
+	for _, d := range dirs {
+		base := filepath.Base(d)
+		name := ""
+		switch {
+		case base == ".qh":
+			name = "default"
+		case strings.HasPrefix(base, ".qh-"):
+			name = strings.TrimPrefix(base, ".qh-")
+		default:
+			continue
+		}
+		if fi, err := os.Stat(d); err != nil || !fi.IsDir() {
+			continue
+		}
+		u := "http://127.0.0.1:8080/v1"
+		var c Config
+		if b, err := os.ReadFile(filepath.Join(d, "config.json")); err == nil && json.Unmarshal(b, &c) == nil && c.URL != "" {
+			u = c.URL
+		}
+		state := "daemon down"
+		if conn, err := net.DialTimeout("unix", filepath.Join(d, "qh.sock"), 300*time.Millisecond); err == nil {
+			conn.Close()
+			state = "daemon up"
+		}
+		fmt.Printf("%-10s %-34s %s\n", name, u, state)
+	}
+	return nil
 }
