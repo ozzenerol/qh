@@ -67,24 +67,10 @@ func logoFrames(path string) ([][]byte, []int, error) {
 	return frames, delays, nil
 }
 
-// kittyChunks writes one graphics command with its payload split in 4096-byte chunks.
-func kittyChunks(b *strings.Builder, ctrl string, data []byte) {
-	s := base64.StdEncoding.EncodeToString(data)
-	first := true
-	for len(s) > 0 {
-		n := min(4096, len(s))
-		more := 0
-		if n < len(s) {
-			more = 1
-		}
-		if first {
-			fmt.Fprintf(b, "\x1b_G%s,q=2,m=%d;%s\x1b\\", ctrl, more, s[:n])
-			first = false
-		} else {
-			fmt.Fprintf(b, "\x1b_Gm=%d;%s\x1b\\", more, s[:n])
-		}
-		s = s[n:]
-	}
+// kittyCmd writes one graphics command with its whole payload. kitty
+// 0.41 does not animate frames sent in 4096-byte chunks.
+func kittyCmd(b *strings.Builder, ctrl string, data []byte) {
+	fmt.Fprintf(b, "\x1b_G%s,q=2;%s\x1b\\", ctrl, base64.StdEncoding.EncodeToString(data))
 }
 
 // kittyLogo returns the escape codes that show the animated logo at the
@@ -93,10 +79,10 @@ func kittyLogo(frames [][]byte, delays []int) string {
 	const id = 4242
 	var b strings.Builder
 	fmt.Fprintf(&b, "\x1b_Ga=d,d=I,i=%d,q=2\x1b\\", id)
-	kittyChunks(&b, fmt.Sprintf("a=T,f=100,i=%d,c=%d,r=%d,C=1", id, logoCols, logoRows), frames[0])
+	kittyCmd(&b, fmt.Sprintf("a=T,f=100,i=%d,c=%d,r=%d,C=1", id, logoCols, logoRows), frames[0])
 	fmt.Fprintf(&b, "\x1b_Ga=a,i=%d,r=1,z=%d,q=2\x1b\\", id, delays[0])
 	for i, fr := range frames[1:] {
-		kittyChunks(&b, fmt.Sprintf("a=f,f=100,i=%d,z=%d", id, delays[i+1]), fr)
+		kittyCmd(&b, fmt.Sprintf("a=f,f=100,i=%d,z=%d", id, delays[i+1]), fr)
 	}
 	fmt.Fprintf(&b, "\x1b_Ga=a,i=%d,s=3,v=1,q=2\x1b\\", id)
 	return b.String()
