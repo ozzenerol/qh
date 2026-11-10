@@ -44,6 +44,7 @@ type Config struct {
 	Confine      *bool    `json:"confine"`       // file tools stay in the project; nil means on
 	ReadRoots    []string `json:"read_roots"`    // more folders read, grep, ls may use; nil means the dependency caches
 	Web          bool     `json:"web"`           // new sessions get web_search and fetch_url
+	Logo         string   `json:"logo"`          // GIF shown in the chat header in kitty, e.g. ~/Downloads/bubu.gif
 	SearchURL    string   `json:"search_url"`    // SearXNG base URL for web_search, e.g. http://192.168.1.142:8080
 	Parallel     int      `json:"parallel"`      // model requests at once across sessions; 0 means 1
 	WriteNote    *bool    `json:"write_note"`    // note when write rewrites a big file for a small change; nil means on

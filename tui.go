@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -135,6 +136,8 @@ type tui struct {
 	model       string
 	ctx         int
 	window      int
+	logo        string // kitty escape codes of the header logo, built once
+	sent        bool   // a prompt went out from this chat
 	compacting  bool
 	lastSummary string
 	showSummary bool
@@ -567,7 +570,11 @@ func meter(n, of, cells int) string {
 	if of > 0 {
 		f = min(cells, n*cells/of)
 	}
-	return cAccent + strings.Repeat("▮", f) + cFrame + strings.Repeat("▮", cells-f) + cReset
+	c := cCode
+	if of > 0 && n*10 >= of*8 {
+		c = cAccent
+	}
+	return c + strings.Repeat("▮", f) + cFrame + strings.Repeat("▯", cells-f) + cReset
 }
 
 func (t *tui) draw() {
@@ -676,11 +683,17 @@ func (t *tui) draw() {
 				txt = cGray + clipCols("watching "+lab+" · what you type now is queued for after this run", iw)
 			}
 		}
+		if i == 0 && len(t.buf) == 0 && !t.running {
+			txt = cFrame + clipCols("ask qwen, or type / for commands", iw)
+		}
 		rows = append(rows, p+txt)
 	}
 	rows = append(rows, rule)
 
 	left := " " + t.session
+	if !t.sent && t.ctx == 0 {
+		left = " " + cUser + "^R" + cGray + " sessions  " + cUser + "^T" + cGray + " thinking  " + cUser + "^O" + cGray + " summary  " + cUser + "esc" + cGray + " stop"
+	}
 	if t.notice != "" {
 		left = " " + t.notice
 	}
@@ -696,7 +709,10 @@ func (t *tui) draw() {
 		}
 		right += "ctx " + human(t.ctx)
 		if t.window > 0 {
-			right += "/" + human(t.window) + " " + meter(t.ctx, t.window, 8) + cGray + fmt.Sprintf(" %d%%", t.ctx*100/t.window)
+			right += "/" + human(t.window) + " " + meter(t.ctx, t.window, 8)
+			if t.ctx > 0 {
+				right += cGray + fmt.Sprintf(" %d%%", t.ctx*100/t.window)
+			}
 		}
 		if t.lastTS != "" {
 			right += " · " + t.lastTS
@@ -763,10 +779,64 @@ func shortPath(p string) string {
 }
 
 func (t *tui) header() {
-	t.print(
-		" "+cQwen+cBold+"qh"+cReset+cGray+" "+version+cFrame+" · "+cReset+t.session+cFrame+" · "+cGray+clipLeft(shortPath(t.cwd), max(10, t.width-30)),
-		cGray+clipCols(" / commands · esc stops · ctrl+r sessions · ctrl+t thinking · ctrl+o summary", t.width-1),
-	)
+	cfg := loadConfig()
+	proj, branch := t.cwd, ""
+	if out, err := exec.Command("git", "-C", t.cwd, "rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD").Output(); err == nil {
+		if f := strings.Fields(string(out)); len(f) == 2 {
+			proj, branch = f[0], f[1]
+		}
+	}
+	state := "new"
+	if t.ctx > 0 {
+		state = "resumed"
+	}
+	sep := cFrame + " · " + cGray
+	if t.width < 70 {
+		t.print(" " + cQwen + cBold + "▌qh" + cReset + cGray + " " + version + sep + cUser + clipLeft(shortPath(proj), max(10, t.width-20)))
+		return
+	}
+	server := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(cfg.URL, "http://"), "https://"), "/v1")
+	if server == "" {
+		server = "127.0.0.1:8080"
+	}
+	row := func(k, v, extra string) string {
+		l := cQwen + "▌" + cReset + "  " + cGray + fmt.Sprintf("%-7s", k) + " " + cUser + v
+		if extra != "" {
+			l += sep + extra
+		}
+		return l
+	}
+	lines := []string{
+		cQwen + cBold + "▌qh" + cReset + " " + cGray + version,
+		row("server", server, ""),
+		row("project", clipLeft(shortPath(proj), max(10, t.width-40)), branch),
+		row("session", t.session, state),
+	}
+	pad := " "
+	logo := ""
+	if cfg.Logo != "" && kittyOK() {
+		if t.logo == "" {
+			if fr, d, err := logoFrames(cfg.Logo); err == nil && len(fr) > 0 {
+				t.logo = kittyLogo(fr, d)
+			}
+		}
+		if t.logo != "" {
+			logo = t.logo
+			pad = strings.Repeat(" ", logoCols+3)
+			lines = append([]string{""}, lines...)
+		}
+	}
+	for i := range lines {
+		if lines[i] != "" || logo == "" {
+			lines[i] = pad + lines[i]
+		}
+	}
+	if logo == "" {
+		t.print(lines...)
+		return
+	}
+	t.print(lines...)
+	t.w(fmt.Sprintf("\x1b[%dA\r\x1b[1C", len(lines)) + logo + fmt.Sprintf("\x1b[%dB\r", len(lines)))
 }
 
 // key handling ---------------------------------------------------------------
@@ -1449,6 +1519,7 @@ func chatTUI(session string, pick bool) error {
 			case actCancel:
 				cancelRun()
 			case actSubmit:
+				t.sent = true
 				if t.submit() {
 					return nil
 				}
