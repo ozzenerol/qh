@@ -122,7 +122,7 @@ qh eval -list
 qh eval -compare ~/.qh/eval/A.json ~/.qh/eval/B.json
 ```
 
-Each run prints one line: pass or fail, steps, failed tool calls (tool errors plus failed commands, as before they were split; the JSON has both), the size of the last request, fresh tokens (prompt tokens that the server did not have in its cache, summed over the requests), output tokens and seconds. The results go to `~/.qh/eval/DATE.json` with the version, the git commit of the build and the model. `-compare` prints the pass count and the means per task for both files. `-dir DIR` reads `.task` files from a folder, `-timeout` limits each task (20m by default), `-v` prints the tool calls, and `-noexplore` turns explore off for the run (the JSON file records which). The eval sends its requests straight to the model server, not through the daemon, so it should run when no other run uses the model.
+Each run prints one line: pass or fail, steps, failed tool calls (tool errors plus failed commands, as before they were split; the JSON has both), the size of the last request, fresh tokens (prompt tokens that the server did not have in its cache, summed over the requests), output tokens and seconds. The results go to `~/.qh/eval/DATE.json` with the version, the git commit of the build and the model. `-compare` prints the pass count and the means per task for both files. `-dir DIR` reads `.task` files from a folder, `-timeout` limits each task (20m by default), `-v` prints the tool calls, `-noexplore` turns explore off for the run, and `-steps on|off` sets `batch_hint`, `edit_snippet` and `grep_context` together (the JSON file records both). The line and the JSON also count tool calls. The eval sends its requests straight to the model server, not through the daemon, so it should run when no other run uses the model.
 
 ## Prompt cache
 
@@ -148,6 +148,9 @@ The server reuses its cache for the part of a request that matches an earlier on
   "read_roots": ["~/.m2/repository", "~/.gradle/caches", "~/go/pkg/mod", "/usr/local/go/src"],
   "web": false,
   "search_url": "",
+  "batch_hint": true,
+  "edit_snippet": true,
+  "grep_context": true,
   "sort_imports": false,
   "format": {".go": "gofmt -w"},
   "diagnostics": {".py": ""},
@@ -161,6 +164,8 @@ An empty `model` means the first model the server lists. `compact_at` 0 means 80
 The file tools (read, grep, ls, glob, write, edit) stay inside the project: the git root of the working directory, or the working directory when it is in no repo. read, grep, ls and glob may also use the `read_roots` folders, by default the Maven, Gradle and Go module caches and the Go sources, so a run can read library code. A path outside gets an error, and symlinks count by where they point. bash is not limited. `"confine": false` turns this off.
 
 Web tools are off by default. `qh run -web`, `qh -web` or `/web on` in the chat turn on `web_search` and `fetch_url` for the session (`/web off` turns them off again), and `"web": true` gives them to every new session. `web_search` asks a SearXNG instance at `search_url` through its JSON API (`json` has to be in `search.formats` in SearXNG's settings.yml) and returns 8 results with title, URL and snippet. `fetch_url` returns a page as plain text, 10000 characters per call, with headings, list items and `pre` blocks kept; `offset` reads further. qh has no built-in search engine: DuckDuckGo's HTML page answered HTTP 202 (a bot check) from the second request on in a test, so it uses SearXNG. Turning web on or off changes the tool list, so the next request misses the prompt cache once.
+
+Three settings cut model turns; each is on unless the config sets it to false. `batch_hint` adds a prompt line and a few words to the read and edit descriptions that say to send independent calls in one answer. `edit_snippet` makes edit return the new lines, numbered, with 2 lines around them (at most 24 new lines), so the model does not read the file again to see them. `grep_context` makes grep return 3 lines around each match when there are 5 matches or fewer, in `grep -n -C` form. They came from 54 saved Mac sessions: 88% of answers with tool calls had one call, and the single-call pairs included 203 reads right after a read, 120 reads right after an edit (85 of the same file) and 56 reads right after a grep. `qh eval -steps off` (two runs per task) against `-steps on` (one run per task): 22/22 and 11/11 passed; 9.8 and 9.0 steps, 2914 and 2652 output tokens, 46 and 42 s per run. The two off runs differ per task by more than that, so the gain is within the noise.
 
 After the model's final answer, qh can tidy the files the run wrote or edited, before the checks run. `sort_imports` sorts the imports of Kotlin files (IntelliJ layout: other packages, then `java`, `javax`, `kotlin`, then aliases) and Java files (static imports last). `format` maps a file extension to a command, and qh appends the changed files of that type. `repos` sets both for one repo, by the folder name of its git root. In Kotlin and Java files it always indents a declaration that sits at column 0 inside a class body, with the block that follows it (that compiles, so nothing else catches it). The report lists what qh changed. `QH_URL`, `QH_MODEL`, `QH_HOME` and `QH_SOCK` override the file.
 
