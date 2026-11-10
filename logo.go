@@ -94,11 +94,9 @@ func kittyLogo(frames [][]byte, delays []int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\x1b_Ga=d,d=I,i=%d,q=2\x1b\\", id)
 	kittyChunks(&b, fmt.Sprintf("a=T,f=100,i=%d,c=%d,r=%d,C=1", id, logoCols, logoRows), frames[0])
-	for _, fr := range frames[1:] {
-		kittyChunks(&b, fmt.Sprintf("a=f,f=100,i=%d", id), fr)
-	}
-	for i, d := range delays {
-		fmt.Fprintf(&b, "\x1b_Ga=a,i=%d,r=%d,z=%d,q=2\x1b\\", id, i+1, d)
+	fmt.Fprintf(&b, "\x1b_Ga=a,i=%d,r=1,z=%d,q=2\x1b\\", id, delays[0])
+	for i, fr := range frames[1:] {
+		kittyChunks(&b, fmt.Sprintf("a=f,f=100,i=%d,z=%d", id, delays[i+1]), fr)
 	}
 	fmt.Fprintf(&b, "\x1b_Ga=a,i=%d,s=3,v=1,q=2\x1b\\", id)
 	return b.String()
