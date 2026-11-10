@@ -65,8 +65,10 @@ func toolSchemas(readOnly bool) []map[string]any {
 }
 
 type Tools struct {
-	Cwd      string
-	ReadOnly bool
+	Cwd       string
+	ReadOnly  bool
+	Web       bool   // web_search and fetch_url
+	SearchURL string // SearXNG base URL for web_search
 
 	busy time.Duration // time spent in Run, for the stats
 
@@ -363,6 +365,22 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 		snap := t.Undo.bashBefore()
 		defer t.Undo.bashAfter(snap)
 		return t.bash(ctx, c, time.Duration(to)*time.Second)
+	case "web_search", "fetch_url":
+		if !t.Web {
+			return "error: web tools are off; the user turns them on with qh run -web or /web on", false
+		}
+		if name == "web_search" {
+			if e := need("query"); e != "" {
+				return e, false
+			}
+			q, _ := s("query")
+			return webSearch(ctx, t.SearchURL, q)
+		}
+		if e := need("url"); e != "" {
+			return e, false
+		}
+		u, _ := s("url")
+		return fetchURL(ctx, u, n("offset", 0))
 	case "lookup":
 		if e := need("name"); e != "" {
 			return e, false

@@ -43,6 +43,8 @@ type Config struct {
 	ExploreSteps int      `json:"explore_steps"` // step limit of one explore sub-run; 0 means 15
 	Confine      *bool    `json:"confine"`       // file tools stay in the project; nil means on
 	ReadRoots    []string `json:"read_roots"`    // more folders read, grep, ls may use; nil means the dependency caches
+	Web          bool     `json:"web"`           // new sessions get web_search and fetch_url
+	SearchURL    string   `json:"search_url"`    // SearXNG base URL for web_search, e.g. http://192.168.1.142:8080
 	FormatCfg
 	Repos map[string]FormatCfg `json:"repos"` // settings for one repo, by the folder name of its git root
 }
@@ -96,6 +98,7 @@ type ClientReq struct {
 	Prompt   string `json:"prompt,omitempty"`
 	New      bool   `json:"new,omitempty"`
 	Think    *bool  `json:"think,omitempty"`
+	Web      *bool  `json:"web,omitempty"` // run, set: web_search and fetch_url for the session
 	ReadOnly bool   `json:"read_only,omitempty"`
 	Timeout  int    `json:"timeout,omitempty"` // run: seconds for the model loop; the checks still run after it
 }
@@ -176,7 +179,7 @@ func (s *Server) session(name, cwd string) (*Session, error) {
 	if ss, ok := s.sessions[name]; ok {
 		return ss, nil
 	}
-	ss := &Session{Name: name, Cwd: cwd, Think: true}
+	ss := &Session{Name: name, Cwd: cwd, Think: true, Web: s.cfg.Web}
 	if d, err := qhDir(); err == nil {
 		if b, err := os.ReadFile(filepath.Join(d, "sessions", name+".json")); err == nil {
 			json.Unmarshal(b, ss)
@@ -298,13 +301,18 @@ func (s *Server) handle(c net.Conn) {
 			emit(Event{T: "error", Text: err.Error()})
 			return
 		}
-		if req.Think != nil {
+		if req.Think != nil || req.Web != nil {
 			ss.mu.Lock()
-			ss.Think = *req.Think
+			if req.Think != nil {
+				ss.Think = *req.Think
+			}
+			if req.Web != nil {
+				ss.Web = *req.Web
+			}
 			s.save(ss)
 			ss.mu.Unlock()
 		}
-		emit(Event{T: "done", Text: fmt.Sprintf("thinking %s for %s", onOff(ss.Think), req.Session)})
+		emit(Event{T: "done", Text: fmt.Sprintf("thinking %s, web %s for %s", onOff(ss.Think), onOff(ss.Web), req.Session)})
 	case "run":
 		s.run(c, r, req, emit)
 	case "compact":
@@ -398,6 +406,9 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 	}
 	if req.Think != nil {
 		ss.Think = *req.Think
+	}
+	if req.Web != nil {
+		ss.Web = *req.Web
 	}
 	s.save(ss) // the session is listed while it runs
 	llm := &LLM{BaseURL: s.cfg.URL, Model: s.cfg.Model, HTTP: &http.Client{}}

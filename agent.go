@@ -23,6 +23,7 @@ type Session struct {
 	Cwd        string     `json:"cwd"`
 	Think      bool       `json:"think"`
 	ReadOnly   bool       `json:"read_only"`
+	Web        bool       `json:"web,omitempty"` // web_search and fetch_url
 	Todo       []TodoItem `json:"todo,omitempty"`
 	LastPrompt int        `json:"last_prompt"` // tokens of the last request
 	Msgs       []Message  `json:"messages"`
@@ -478,7 +479,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	}
 	s.runs++
 	changed := map[string]bool{} // files that write and edit changed in this run
-	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Seen: s.seen, Changed: changed}
+	tools := &Tools{Cwd: s.Cwd, ReadOnly: s.ReadOnly, Web: s.Web, SearchURL: a.Cfg.SearchURL, Seen: s.seen, Changed: changed}
 	tools.Diag, tools.DiagTimeout = a.diagCfg(s.Cwd)
 	tools.Confine, tools.ReadRoots = a.Cfg.confine()
 	if !s.ReadOnly {
@@ -488,6 +489,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		defer tools.Undo.finish()
 	}
 	schemas := a.schemas(s.ReadOnly)
+	if s.Web {
+		schemas = append(schemas, webSchemas()...)
+	}
 	s.answerOpen()
 	system := Message{Role: "system", Content: s.systemPrompt(a.systemExtra(s.ReadOnly))}
 	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})
@@ -827,6 +831,10 @@ func argSummary(name, raw string) string {
 			s += fmt.Sprintf(" @%v", o)
 		}
 		return s
+	case "web_search":
+		return str("query")
+	case "fetch_url":
+		return str("url")
 	case "edit", "write", "ls":
 		return str("path")
 	case "glob":

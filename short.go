@@ -49,6 +49,13 @@ func shortResult(tool, args, out string, ok bool) string {
 			return "no match"
 		}
 		return plural(count(), "hit")
+	case "web_search":
+		if strings.HasPrefix(out, "no results") {
+			return "no results"
+		}
+		return plural(strings.Count(out, "\n   http"), "result")
+	case "fetch_url":
+		return fmt.Sprintf("%d chars", len([]rune(out)))
 	case "glob", "ls":
 		return plural(count(), "entry")
 	case "edit":

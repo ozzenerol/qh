@@ -29,6 +29,7 @@ usage:
   qh -s NAME                   chat in session NAME
   qh -c                        continue the latest session of this folder
   qh -r [name]                 pick a session to resume, or resume NAME
+  qh -web ...                  chat with web_search and fetch_url on for the session
   qh run [flags] "task"        run one task and print the report (task "-" reads stdin)
   qh sessions                  list the sessions
   qh top                       live view of every daemon (~/.qh, ~/.qh-*) and its runs
@@ -49,6 +50,7 @@ run flags:
   -new        clear the session first
   -nothink    turn thinking off for this session
   -ro         read-only run: the tools are read, grep and ls
+  -web        turn on web_search (SearXNG at search_url) and fetch_url for this session
   -timeout d  stop the model after d (for example 15m), run the checks, and exit with 124
   -from name  label that an open chat on the session shows (default $QH_FROM or "qh run")
   -q          print only the report
@@ -56,7 +58,7 @@ run flags:
 qh run exits with 4 when the run stops at the step limit, and 124 at -timeout.
 
 The daemon listens on ~/.qh/qh.sock and starts on the first call.
-Settings are in ~/.qh/config.json: url, model, max_steps, max_tokens, think_budget.
+Settings are in ~/.qh/config.json: url, model, max_steps, max_tokens, think_budget, web, search_url.
 `
 
 func main() {
@@ -360,6 +362,7 @@ func runCmd(args []string) error {
 	nothink := fs.Bool("nothink", false, "thinking off")
 	quiet := fs.Bool("q", false, "print only the report")
 	ro := fs.Bool("ro", false, "read-only: the tools are read, grep and ls")
+	web := fs.Bool("web", false, "turn on web_search and fetch_url for this session")
 	timeout := fs.Duration("timeout", 0, "cancel the run after this long, for example 15m")
 	from := fs.String("from", os.Getenv("QH_FROM"), "label for watchers of the session, for example opus")
 	fs.Parse(args)
@@ -382,6 +385,9 @@ func runCmd(args []string) error {
 	if *nothink {
 		f := false
 		req.Think = &f
+	}
+	if *web {
+		req.Web = web
 	}
 	v := &view{out: os.Stdout, log: os.Stderr, color: isTTY(os.Stderr), quiet: *quiet}
 	fmt.Fprintln(os.Stderr, "qh: session "+*name)
@@ -514,6 +520,7 @@ func chat(args []string) error {
 	name := fs.String("s", "", "session")
 	cont := fs.Bool("c", false, "continue the latest session of this folder")
 	resume := fs.Bool("r", false, "pick a session to resume (or give its name)")
+	web := fs.Bool("web", false, "turn on web_search and fetch_url for the session")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	fs.Parse(args)
 	pick := false
@@ -529,6 +536,12 @@ func chat(args []string) error {
 	case *cont:
 		cwd, _ := os.Getwd()
 		*name = latestSession(cwd)
+	}
+	if *web && *name != "" {
+		cwd, _ := os.Getwd()
+		if err := simpleQuiet(ClientReq{Op: "set", Session: *name, Cwd: cwd, Web: web}); err != nil {
+			return err
+		}
 	}
 	if isTTY(os.Stdin) && isTTY(os.Stdout) && os.Getenv("TERM") != "dumb" {
 		return chatTUI(*name, pick)

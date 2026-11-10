@@ -23,6 +23,8 @@ var slashCmds = []slashCmd{
 	{"/compact", "summarize the conversation to free context"},
 	{"/think on", "Qwen thinks before it answers"},
 	{"/think off", "answer at once, faster and less careful"},
+	{"/web on", "let Qwen search the web and fetch pages"},
+	{"/web off", "no web tools (the default)"},
 	{"/clear", "clear the screen"},
 	{"/exit", "quit"},
 }
@@ -1533,6 +1535,14 @@ func (t *tui) submit() bool {
 			t.print(cRed + "  ⎿  " + err.Error())
 		} else {
 			t.notice = "thinking " + onOff(on) + " for this session"
+		}
+		return false
+	case strings.HasPrefix(text, "/web"):
+		on := strings.TrimSpace(strings.TrimPrefix(text, "/web")) != "off"
+		if err := simpleQuiet(ClientReq{Op: "set", Session: t.session, Cwd: t.cwd, Web: &on}); err != nil {
+			t.print(cRed + "  ⎿  " + err.Error())
+		} else {
+			t.notice = "web " + onOff(on) + " for this session"
 		}
 		return false
 	case strings.HasPrefix(text, "/"):
