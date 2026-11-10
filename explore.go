@@ -39,10 +39,14 @@ func (a *Agent) schemas(readOnly bool) []map[string]any {
 
 // systemExtra is the text that the run adds to the session's system prompt.
 func (a *Agent) systemExtra(readOnly bool) string {
+	extra := ""
 	if !readOnly && a.exploreOn() {
-		return exploreLine
+		extra = exploreLine
 	}
-	return ""
+	if !readOnly {
+		extra += reportLine(a.Cfg.reportLines())
+	}
+	return extra
 }
 
 func exploreSchemas() []map[string]any {

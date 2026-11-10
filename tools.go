@@ -69,6 +69,7 @@ type Tools struct {
 	ReadOnly  bool
 	Web       bool   // web_search and fetch_url
 	SearchURL string // SearXNG base URL for web_search
+	WriteNote bool   // add rewriteNote to a write that changes a few lines of a big file
 
 	busy time.Duration // time spent in Run, for the stats
 
@@ -499,7 +500,11 @@ func (t *Tools) write(fp, shown, c string) (string, bool) {
 		return fmt.Sprintf("wrote %s (%d lines, no change)", shown, n), true
 	}
 	add, del := lineDiff(string(prev), c)
-	return fmt.Sprintf("wrote %s (%d lines; vs before: %d lines added, %d removed)", shown, n, add, del), true
+	out := fmt.Sprintf("wrote %s (%d lines; vs before: %d lines added, %d removed)", shown, n, add, del)
+	if t.WriteNote {
+		out += rewriteNote(strings.Count(string(prev), "\n")+1, add, del)
+	}
+	return out, true
 }
 
 // lineDiff counts the lines that b adds to a and the lines it removes, by

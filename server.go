@@ -45,6 +45,9 @@ type Config struct {
 	ReadRoots    []string `json:"read_roots"`    // more folders read, grep, ls may use; nil means the dependency caches
 	Web          bool     `json:"web"`           // new sessions get web_search and fetch_url
 	SearchURL    string   `json:"search_url"`    // SearXNG base URL for web_search, e.g. http://192.168.1.142:8080
+	WriteNote    *bool    `json:"write_note"`    // note when write rewrites a big file for a small change; nil means on
+	ReportLines  *int     `json:"report_lines"`  // line limit for the final report in the system prompt; nil means 8, 0 off
+	EditThink    *bool    `json:"edit_think"`    // think on the step after a clean edit/write/todo step; nil means off
 	FormatCfg
 	Repos map[string]FormatCfg `json:"repos"` // settings for one repo, by the folder name of its git root
 }
