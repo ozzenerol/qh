@@ -128,6 +128,7 @@ type tui struct {
 	budget       int // think_budget, for the meter
 	inThink      bool
 	md           mdState
+	tbl          []string // rows of a Markdown table that is still coming
 	showThink    bool
 	frame        int
 
@@ -292,6 +293,11 @@ func (t *tui) textLine(line string) {
 		t.md = mdState{}
 	}
 	t.lastKind = "text"
+	if !t.md.fence && isTableRow(line) {
+		t.tbl = append(t.tbl, line)
+		return
+	}
+	t.flushTable()
 	rendered := t.md.line(line)
 	for _, l := range wrap(rendered, t.width-gw-1) {
 		t.print(t.qwenPrefix() + l)
@@ -334,9 +340,22 @@ func (t *tui) endThought() {
 	t.thoughtN = 0
 }
 
+// flushTable prints the table rows collected so far as one drawn table.
+func (t *tui) flushTable() {
+	if len(t.tbl) == 0 {
+		return
+	}
+	rows := renderTable(t.tbl, t.width-gw-1)
+	t.tbl = nil
+	for _, l := range rows {
+		t.print(t.qwenPrefix() + l)
+	}
+}
+
 func (t *tui) endMessage() {
 	t.flushThink(true)
 	t.flushText(true)
+	t.flushTable()
 	t.inMsg, t.inThink = false, false
 }
 
@@ -561,6 +580,11 @@ func (t *tui) draw() {
 	if t.showSummary && t.lastSummary != "" {
 		rows = append(rows, t.summaryPanel()...)
 	}
+	if len(t.tbl) > 0 {
+		for _, l := range renderTable(t.tbl, t.width-gw-1) {
+			rows = append(rows, strings.Repeat(" ", gw)+l)
+		}
+	}
 	if t.textPart != "" {
 		p := strings.Repeat(" ", gw)
 		if !t.qwenShown {
@@ -714,13 +738,7 @@ func clipLeft(s string, w int) string {
 
 // summaryPanel is the last compaction summary, cut to fit the screen.
 func (t *tui) summaryPanel() []string {
-	md := mdState{}
-	var body []string
-	for _, l := range strings.Split(t.lastSummary, "\n") {
-		for _, wl := range wrap(md.line(l), t.width-5) {
-			body = append(body, wl)
-		}
-	}
+	body := mdLines(t.lastSummary, t.width-5)
 	room := max(3, termHeight(int(t.out.Fd()))-14)
 	more := ""
 	if len(body) > room {
@@ -1330,6 +1348,7 @@ func (t *tui) switchTo(name string, events chan genEvent) {
 	t.stopAttach = make(chan struct{})
 	t.session = name
 	t.running, t.tool, t.textPart, t.thinkPart, t.inMsg, t.inThink = false, "", "", "", false, false
+	t.tbl = nil
 	t.ctx, t.lastTS, t.attached = 0, "", false
 	for _, r := range listSessionsReq() {
 		if r.Name == name {
