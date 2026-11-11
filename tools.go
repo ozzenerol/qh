@@ -377,7 +377,11 @@ func (t *Tools) Run(ctx context.Context, name, rawArgs string) (string, bool) {
 				return e, false
 			}
 			q, _ := s("query")
-			return webSearch(ctx, t.SearchURL, q)
+			out, ok := webSearch(ctx, t.SearchURL, q)
+			if ok {
+				out = "Today is " + today() + ".\n" + out
+			}
+			return out, ok
 		}
 		if e := need("url"); e != "" {
 			return e, false

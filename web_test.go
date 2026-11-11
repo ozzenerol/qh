@@ -59,3 +59,10 @@ func TestWebOff(t *testing.T) {
 		t.Errorf("got %v %q", ok, out)
 	}
 }
+
+func TestDateInUserMessage(t *testing.T) {
+	ms := wire([]Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "hi", Date: "2026-11-11"}, {Role: "user", Content: "plain"}})
+	if ms[0].Content != "sys" || ms[1].Content != "Today is 2026-11-11.\n\nhi" || ms[1].Date != "" || ms[2].Content != "plain" {
+		t.Fatalf("got %+v", ms)
+	}
+}

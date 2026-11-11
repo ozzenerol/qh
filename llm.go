@@ -29,6 +29,7 @@ type Message struct {
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
 	Name             string     `json:"name,omitempty"`
 	From             string     `json:"from,omitempty"` // who sent a user message; not sent to the model
+	Date             string     `json:"date,omitempty"` // day the user message was sent; wire() puts it in front
 }
 
 type Usage struct {
@@ -281,6 +282,10 @@ func wire(ms []Message) []Message {
 	out := make([]Message, len(ms))
 	for i, m := range ms {
 		m.From = ""
+		if m.Date != "" {
+			m.Content = "Today is " + m.Date + ".\n\n" + m.Content
+			m.Date = ""
+		}
 		out[i] = m
 	}
 	return out

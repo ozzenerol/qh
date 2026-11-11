@@ -73,6 +73,10 @@ func webGet(ctx context.Context, req *http.Request) (string, string, error) {
 	return string(b), resp.Header.Get("Content-Type"), nil
 }
 
+// today is the local date. It goes in user messages and search results, never
+// in the system prompt, so the cached prefix stays the same.
+func today() string { return time.Now().Format("2006-01-02") }
+
 // webSearch asks a SearXNG instance (config search_url) through its JSON API.
 func webSearch(ctx context.Context, base, q string) (string, bool) {
 	q = strings.TrimSpace(q)

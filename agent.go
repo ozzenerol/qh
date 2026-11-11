@@ -505,7 +505,11 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 	}
 	s.answerOpen()
 	system := Message{Role: "system", Content: s.systemPrompt(a.systemExtra(s.ReadOnly))}
-	s.Msgs = append(s.Msgs, Message{Role: "user", Content: prompt, From: from})
+	user := Message{Role: "user", Content: prompt, From: from}
+	if s.Web {
+		user.Date = today()
+	}
+	s.Msgs = append(s.Msgs, user)
 	if a.Save != nil {
 		a.Save()
 	}
