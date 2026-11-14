@@ -65,6 +65,12 @@ Settings are in ~/.qh/config.json: url, model, max_steps, max_tokens, think_budg
 
 func main() {
 	log.SetFlags(log.LstdFlags)
+	// Started in / (a launcher or a fresh terminal): work in the home folder.
+	if wd, err := os.Getwd(); err == nil && wd == "/" {
+		if h, err := os.UserHomeDir(); err == nil {
+			os.Chdir(h)
+		}
+	}
 	args, err := pickInstance(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "qh:", err)
