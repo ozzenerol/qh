@@ -43,7 +43,14 @@ type Usage struct {
 type LLM struct {
 	BaseURL string
 	Model   string
+	APIKey  string
 	HTTP    *http.Client
+}
+
+func (l *LLM) auth(req *http.Request) {
+	if l.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+l.APIKey)
+	}
 }
 
 type Request struct {
@@ -66,6 +73,7 @@ func (l *LLM) ResolveModel(ctx context.Context) error {
 		return nil
 	}
 	req, _ := http.NewRequestWithContext(ctx, "GET", l.BaseURL+"/models", nil)
+	l.auth(req)
 	resp, err := l.HTTP.Do(req)
 	if err != nil {
 		return fmt.Errorf("model server at %s: %w", l.BaseURL, err)
@@ -111,6 +119,7 @@ func (l *LLM) Chat(ctx context.Context, r Request, onDelta func(Delta) bool) (Me
 		return Message{}, Usage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	l.auth(req)
 	resp, err := l.HTTP.Do(req)
 	if err != nil {
 		return Message{}, Usage{}, err

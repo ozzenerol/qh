@@ -422,7 +422,7 @@ func evalCmd(args []string) error {
 	if err := applySet(&cfg, *set); err != nil {
 		return err
 	}
-	llm := &LLM{BaseURL: cfg.URL, Model: cfg.Model, HTTP: &http.Client{}}
+	llm := &LLM{BaseURL: cfg.URL, Model: cfg.Model, APIKey: cfg.APIKey, HTTP: &http.Client{}}
 	if err := llm.ResolveModel(ctx); err != nil {
 		return err
 	}

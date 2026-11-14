@@ -33,6 +33,7 @@ type FormatCfg struct {
 type Config struct {
 	URL          string   `json:"url"`
 	Model        string   `json:"model"`
+	APIKey       string   `json:"api_key"` // sent as a Bearer token when set
 	MaxSteps     int      `json:"max_steps"`
 	MaxTokens    int      `json:"max_tokens"`
 	ThinkBudget  int      `json:"think_budget"`  // chars of thinking in one step
@@ -438,7 +439,7 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 		ss.Profile = *req.Profile
 	}
 	s.save(ss) // the session is listed while it runs
-	llm := &LLM{BaseURL: s.cfg.URL, Model: s.cfg.Model, HTTP: &http.Client{}}
+	llm := &LLM{BaseURL: s.cfg.URL, Model: s.cfg.Model, APIKey: s.cfg.APIKey, HTTP: &http.Client{}}
 	if err := llm.ResolveModel(ctx); err != nil {
 		all(Event{T: "error", Text: err.Error()})
 		all(Event{T: "done", From: req.From})
