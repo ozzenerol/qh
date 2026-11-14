@@ -30,6 +30,7 @@ usage:
   qh -c                        continue the latest session of this folder
   qh -r [name]                 pick a session to resume, or resume NAME
   qh -web ...                  chat with web_search and fetch_url on for the session
+  qh -p java ...               chat with a profile (profiles/NAME.md) in the system prompt
   qh run [flags] "task"        run one task and print the report (task "-" reads stdin)
   qh sessions                  list the sessions
   qh top                       live view of every daemon (~/.qh, ~/.qh-*) and its runs
@@ -51,6 +52,7 @@ run flags:
   -nothink    turn thinking off for this session
   -ro         read-only run: the tools are read, grep and ls
   -web        turn on web_search (SearXNG at search_url) and fetch_url for this session
+  -p name     profile added to the system prompt (profiles/NAME.md, for example java)
   -timeout d  stop the model after d (for example 15m), run the checks, and exit with 124
   -from name  label that an open chat on the session shows (default $QH_FROM or "qh run")
   -q          print only the report
@@ -363,6 +365,7 @@ func runCmd(args []string) error {
 	quiet := fs.Bool("q", false, "print only the report")
 	ro := fs.Bool("ro", false, "read-only: the tools are read, grep and ls")
 	web := fs.Bool("web", false, "turn on web_search and fetch_url for this session")
+	profile := fs.String("p", "", "profile added to the system prompt, for example java")
 	timeout := fs.Duration("timeout", 0, "cancel the run after this long, for example 15m")
 	from := fs.String("from", os.Getenv("QH_FROM"), "label for watchers of the session, for example opus")
 	fs.Parse(args)
@@ -388,6 +391,12 @@ func runCmd(args []string) error {
 	}
 	if *web {
 		req.Web = web
+	}
+	if *profile != "" {
+		if _, err := loadProfile(*profile); err != nil {
+			return err
+		}
+		req.Profile = profile
 	}
 	v := &view{out: os.Stdout, log: os.Stderr, color: isTTY(os.Stderr), quiet: *quiet}
 	fmt.Fprintln(os.Stderr, "qh: session "+*name)
@@ -521,6 +530,7 @@ func chat(args []string) error {
 	cont := fs.Bool("c", false, "continue the latest session of this folder")
 	resume := fs.Bool("r", false, "pick a session to resume (or give its name)")
 	web := fs.Bool("web", false, "turn on web_search and fetch_url for the session")
+	profile := fs.String("p", "", "profile added to the system prompt, for example java")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	fs.Parse(args)
 	pick := false
@@ -537,9 +547,21 @@ func chat(args []string) error {
 		cwd, _ := os.Getwd()
 		*name = latestSession(cwd)
 	}
-	if *web && *name != "" {
+	if *profile != "" {
+		if _, err := loadProfile(*profile); err != nil {
+			return err
+		}
+	}
+	if (*web || *profile != "") && *name != "" {
 		cwd, _ := os.Getwd()
-		if err := simpleQuiet(ClientReq{Op: "set", Session: *name, Cwd: cwd, Web: web}); err != nil {
+		req := ClientReq{Op: "set", Session: *name, Cwd: cwd}
+		if *web {
+			req.Web = web
+		}
+		if *profile != "" {
+			req.Profile = profile
+		}
+		if err := simpleQuiet(req); err != nil {
 			return err
 		}
 	}

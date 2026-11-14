@@ -102,18 +102,19 @@ func loadConfig() Config {
 
 // ClientReq is one line of JSON that a client sends after it connects.
 type ClientReq struct {
-	Op       string `json:"op"` // run, attach, cancel, set, reset, sessions, ping, stop
-	Session  string `json:"session,omitempty"`
-	From     string `json:"from,omitempty"`    // label shown to watchers, e.g. "opus"
-	Detach   bool   `json:"detach,omitempty"`  // run: answer at once; events go to watchers only
-	Compact  bool   `json:"compact,omitempty"` // run: compact the session; Prompt is the focus
-	Cwd      string `json:"cwd,omitempty"`
-	Prompt   string `json:"prompt,omitempty"`
-	New      bool   `json:"new,omitempty"`
-	Think    *bool  `json:"think,omitempty"`
-	Web      *bool  `json:"web,omitempty"` // run, set: web_search and fetch_url for the session
-	ReadOnly bool   `json:"read_only,omitempty"`
-	Timeout  int    `json:"timeout,omitempty"` // run: seconds for the model loop; the checks still run after it
+	Op       string  `json:"op"` // run, attach, cancel, set, reset, sessions, ping, stop
+	Session  string  `json:"session,omitempty"`
+	From     string  `json:"from,omitempty"`    // label shown to watchers, e.g. "opus"
+	Detach   bool    `json:"detach,omitempty"`  // run: answer at once; events go to watchers only
+	Compact  bool    `json:"compact,omitempty"` // run: compact the session; Prompt is the focus
+	Cwd      string  `json:"cwd,omitempty"`
+	Prompt   string  `json:"prompt,omitempty"`
+	New      bool    `json:"new,omitempty"`
+	Think    *bool   `json:"think,omitempty"`
+	Web      *bool   `json:"web,omitempty"`     // run, set: web_search and fetch_url for the session
+	Profile  *string `json:"profile,omitempty"` // run, set: profile of the session ("" clears it)
+	ReadOnly bool    `json:"read_only,omitempty"`
+	Timeout  int     `json:"timeout,omitempty"` // run: seconds for the model loop; the checks still run after it
 }
 
 type chatReg struct{ from, session string }
@@ -315,8 +316,17 @@ func (s *Server) handle(c net.Conn) {
 			emit(Event{T: "error", Text: err.Error()})
 			return
 		}
-		if req.Think != nil || req.Web != nil {
+		if req.Profile != nil && *req.Profile != "" {
+			if _, err := loadProfile(*req.Profile); err != nil {
+				emit(Event{T: "error", Text: err.Error()})
+				return
+			}
+		}
+		if req.Think != nil || req.Web != nil || req.Profile != nil {
 			ss.mu.Lock()
+			if req.Profile != nil {
+				ss.Profile = *req.Profile
+			}
 			if req.Think != nil {
 				ss.Think = *req.Think
 			}
@@ -326,7 +336,7 @@ func (s *Server) handle(c net.Conn) {
 			s.save(ss)
 			ss.mu.Unlock()
 		}
-		emit(Event{T: "done", Text: fmt.Sprintf("thinking %s, web %s for %s", onOff(ss.Think), onOff(ss.Web), req.Session)})
+		emit(Event{T: "done", Text: fmt.Sprintf("thinking %s, web %s, profile %s for %s", onOff(ss.Think), onOff(ss.Web), orNone(ss.Profile), req.Session)})
 	case "run":
 		s.run(c, r, req, emit)
 	case "compact":
@@ -423,6 +433,9 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 	}
 	if req.Web != nil {
 		ss.Web = *req.Web
+	}
+	if req.Profile != nil {
+		ss.Profile = *req.Profile
 	}
 	s.save(ss) // the session is listed while it runs
 	llm := &LLM{BaseURL: s.cfg.URL, Model: s.cfg.Model, HTTP: &http.Client{}}
@@ -744,4 +757,11 @@ func (c Config) confine() (bool, []string) {
 		out = append(out, filepath.Clean(r))
 	}
 	return true, out
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }

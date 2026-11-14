@@ -13,6 +13,11 @@ import (
 // changes, since the cache is lost then anyway.
 // extra goes at the end of the base prompt, before the context files.
 func (s *Session) systemPrompt(extra string) string {
+	if s.Profile != "" {
+		if t, err := loadProfile(s.Profile); err == nil {
+			extra += "\n\n" + t
+		}
+	}
 	key := s.Cwd + "\x00" + strconv.FormatBool(s.ReadOnly) + "\x00" + extra + "\x00" + promptVersion(s.ReadOnly)
 	if s.System == "" || s.SysKey != key || len(s.Msgs) == 0 {
 		p := buildSystem(s.Cwd, s.ReadOnly)

@@ -23,7 +23,8 @@ type Session struct {
 	Cwd        string     `json:"cwd"`
 	Think      bool       `json:"think"`
 	ReadOnly   bool       `json:"read_only"`
-	Web        bool       `json:"web,omitempty"` // web_search and fetch_url
+	Web        bool       `json:"web,omitempty"`     // web_search and fetch_url
+	Profile    string     `json:"profile,omitempty"` // profiles/NAME.md added to the system prompt
 	Todo       []TodoItem `json:"todo,omitempty"`
 	LastPrompt int        `json:"last_prompt"` // tokens of the last request
 	Msgs       []Message  `json:"messages"`

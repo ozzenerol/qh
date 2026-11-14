@@ -1316,3 +1316,14 @@ func TestDeleteSession(t *testing.T) {
 		t.Fatal("file still there")
 	}
 }
+
+func TestProfileInSystemPrompt(t *testing.T) {
+	t.Setenv("QH_HOME", t.TempDir())
+	s := &Session{Cwd: t.TempDir(), Profile: "java"}
+	if p := s.systemPrompt(""); !strings.Contains(p, "# Profile: Java / Spring Boot") {
+		t.Fatal("java profile missing from the system prompt")
+	}
+	if _, err := loadProfile("nope"); err == nil {
+		t.Fatal("unknown profile loaded")
+	}
+}
