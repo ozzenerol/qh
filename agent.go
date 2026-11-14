@@ -149,7 +149,7 @@ type Stats struct {
 }
 
 type Event struct {
-	T      string `json:"t"` // user, queued, dropped, thinking, text, tool, result, info, error, done, attached
+	T      string `json:"t"` // user, queued, dropped, thinking, text, tool, result, step, info, error, done, attached
 	From   string `json:"from,omitempty"`
 	Replay bool   `json:"replay,omitempty"`
 	Text   string `json:"text,omitempty"`
@@ -557,6 +557,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		}
 		quiet = false
 		th0 := st.Thinking
+		tm0 := a.tm
 		var msg Message
 		var u Usage
 		var err error
@@ -611,6 +612,9 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 		outSplit(st.OutChars, msg, st.Thinking-th0)
 		s.LastPrompt = u.PromptTokens + u.CompletionTokens
 		s.Msgs = append(s.Msgs, msg)
+		emit(Event{T: "step", Stats: &Stats{Steps: st.Steps, Prompt: u.PromptTokens, Cached: u.Details.CachedTokens,
+			Output: u.CompletionTokens, Thinking: st.Thinking - th0,
+			PrefillSecs: (a.tm.prefill - tm0.prefill).Seconds(), GenSecs: (a.tm.gen - tm0.gen).Seconds()}})
 		if a.Save != nil {
 			a.Save()
 		}

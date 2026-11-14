@@ -328,7 +328,7 @@ collect:
 			t.Fatalf("watcher saw %v", seen)
 		}
 	}
-	want := []string{"user:opus:one", "queued:opus:two", "text::echo: one", "done:opus:echo: one", "user:opus:two", "text::echo: two", "done:opus:echo: two"}
+	want := []string{"user:opus:one", "queued:opus:two", "text::echo: one", "step::", "done:opus:echo: one", "user:opus:two", "text::echo: two", "step::", "done:opus:echo: two"}
 	if strings.Join(seen, "|") != strings.Join(want, "|") {
 		t.Fatalf("watcher saw\n%v\nwant\n%v", seen, want)
 	}

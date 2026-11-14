@@ -28,6 +28,7 @@ var slashCmds = []slashCmd{
 	{"/think off", "answer at once, faster and less careful"},
 	{"/web on", "let Qwen search the web and fetch pages"},
 	{"/web off", "no web tools (the default)"},
+	{"/view", "full-screen views: contract, review, profiler, sequence (alt+1..4)"},
 	{"/clear", "clear the screen"},
 	{"/exit", "quit"},
 }
@@ -52,6 +53,8 @@ func helpLines() []string {
 		{"ctrl+t", "show or hide the thinking"},
 		{"ctrl+r", "sessions: open, delete, clear finished runs"},
 		{"ctrl+o", "show or hide the last compaction summary"},
+		{"alt+1..4", "views: contract, review, profiler, sequence (f1..f4, /view)"},
+		{"alt+0 esc", "back to the chat from a view"},
 		{"ctrl+l", "clear the screen"},
 		{"ctrl+c ×2", "quit"},
 	} {
@@ -159,6 +162,20 @@ type tui struct {
 	liveRows  int // rows of the live area at the last draw
 	cursorRow int // row of the cursor inside the live area
 	attached  bool
+
+	// full-screen views (views.go)
+	view    int      // 0 is the chat
+	viewKey string   // the view at the last draw
+	vscroll int      // lines scrolled
+	vsel    int      // selected step or hunk, -1 for the default
+	held    []string // lines printed while a view was open
+	resized bool     // the window changed size while a view was open
+	tr      trace
+	rv      review
+	rvFile  int
+	todo    []TodoItem
+	todoAt  time.Time
+	root    string
 }
 
 // w adds to the frame; flush sends the frame to the terminal in one write.
@@ -195,6 +212,13 @@ func (t *tui) clearLive() {
 
 // print writes lines above the live area.
 func (t *tui) print(lines ...string) {
+	if t.view != 0 {
+		t.held = append(t.held, lines...)
+		if len(t.held) > 5000 {
+			t.held = t.held[len(t.held)-4000:]
+		}
+		return
+	}
 	t.erase()
 	for _, l := range lines {
 		t.w(l + cReset + "\x1b[K\n")
@@ -423,6 +447,8 @@ func padRight(s string, w int) string {
 }
 
 func (t *tui) event(e Event) {
+	by, _ := speaker(t.label(e.From))
+	t.tr.add(e, time.Now(), by)
 	switch e.T {
 	case "user":
 		t.endMessage()
@@ -499,7 +525,7 @@ func (t *tui) event(e Event) {
 		}
 		t.print(t.callLine(e.Tool, arg, short, e.OK, e.Ms))
 		if !e.OK && e.Text != "" {
-			t.print(strings.Repeat(" ", gw) + cFrame + "│  " + cRed + oneLine(e.Text, t.width-gw-5))
+			t.print(strings.Repeat(" ", gw) + cFrame + "│  " + cRed + oneLine(e.Text, t.width-gw-9))
 		}
 		t.tool, t.toolName, t.toolArg = "", "", ""
 		t.thinkN = 0
@@ -580,6 +606,10 @@ func meter(n, of, cells int) string {
 }
 
 func (t *tui) draw() {
+	if t.view != 0 && t.picker == nil {
+		t.drawView()
+		return
+	}
 	if t.picker != nil {
 		rows := t.pickerRows()
 		t.emitLive(rows, len(rows)-1, 0)
@@ -945,6 +975,8 @@ func (t *tui) insertText(b []byte) {
 func (t *tui) escape(p []byte) (int, uiAction) {
 	if p[1] != '[' && p[1] != 'O' {
 		switch p[1] { // Alt+key, as terminals send it with Option/Alt as Meta
+		case '0', '1', '2', '3', '4':
+			t.setView(int(p[1] - '0'))
 		case 0x7f, 0x08:
 			t.killBack(t.wordLeft(t.cur))
 		case 'b':
@@ -964,6 +996,16 @@ func (t *tui) escape(p []byte) (int, uiAction) {
 		return 0, actNone
 	}
 	seq := string(p[2 : j+1])
+	if n := map[string]int{"P": 1, "Q": 2, "R": 3, "S": 4, "11~": 1, "12~": 2, "13~": 3, "14~": 4}[seq]; n > 0 {
+		t.setView(n)
+		return j + 1, actNone
+	}
+	if t.view != 0 && len(t.sugs()) == 0 {
+		k := map[string]string{"A": "up", "B": "down", "C": "right", "D": "left", "5~": "pgup", "6~": "pgdn", "Z": "backtab"}[seq]
+		if k != "" && t.viewNav(k) {
+			return j + 1, actNone
+		}
+	}
 	if sg := t.sugs(); len(sg) > 0 && (seq == "A" || seq == "B") {
 		if seq == "A" {
 			t.sugSel = (t.sugSel + len(sg) - 1) % len(sg)
@@ -1084,6 +1126,23 @@ func (t *tui) key(r rune) uiAction {
 			return actSubmit
 		}
 		return actNone
+	}
+	if t.view != 0 {
+		switch r {
+		case '\t':
+			if t.viewNav("tab") {
+				return actNone
+			}
+		case 0x0e:
+			t.reviewNote()
+			return actNone
+		case 0x0c:
+			t.viewKey = ""
+			t.w("\x1b[2J")
+			return actNone
+		case 0x12, 0x0f:
+			t.setView(0)
+		}
 	}
 	switch r {
 	case '\r':
@@ -1425,6 +1484,7 @@ func (t *tui) switchTo(name string, events chan genEvent) {
 	t.session = name
 	t.running, t.tool, t.textPart, t.thinkPart, t.inMsg, t.inThink = false, "", "", "", false, false
 	t.tbl = nil
+	t.tr, t.rv, t.rvFile, t.todo, t.todoAt = trace{}, review{}, 0, nil, time.Time{}
 	t.ctx, t.lastTS, t.attached = 0, "", false
 	for _, r := range listSessionsReq() {
 		if r.Name == name {
@@ -1454,6 +1514,10 @@ func chatTUI(session string, pick bool) error {
 		me: fmt.Sprintf("chat:%d", os.Getpid()), budget: loadConfig().ThinkBudget}
 	t.w("\x1b[?2004h") // bracketed paste
 	defer func() {
+		if t.view != 0 {
+			t.w("\x1b[?1049l")
+			t.view = 0
+		}
 		t.clearLive()
 		t.w("\x1b[?2004l")
 		t.flush()
@@ -1539,6 +1603,8 @@ func chatTUI(session string, pick bool) error {
 				switch {
 				case len(t.sugs()) > 0:
 					t.buf, t.cur = nil, 0
+				case t.view != 0:
+					t.setView(0)
 				case t.running:
 					cancelRun()
 				}
@@ -1558,7 +1624,11 @@ func chatTUI(session string, pick bool) error {
 				t.notice = ""
 			}
 		case <-winch:
-			t.clearLive()
+			if t.view != 0 {
+				t.resized, t.viewKey = true, ""
+			} else {
+				t.clearLive()
+			}
 			t.width = termWidth(int(os.Stdout.Fd()))
 		case <-tick.C:
 			if !t.running {
@@ -1581,6 +1651,18 @@ func (t *tui) submit() bool {
 		t.hist = append(t.hist, text)
 	}
 	t.histPos = len(t.hist)
+	if text == "/view" || strings.HasPrefix(text, "/view ") {
+		n := viewByName(strings.TrimPrefix(text, "/view"))
+		if n < 0 {
+			t.notice = "views: contract, review, profiler, sequence, chat (alt+1..4, alt+0)"
+		} else {
+			t.setView(n)
+		}
+		return false
+	}
+	if strings.HasPrefix(text, "/") && t.view != 0 {
+		t.setView(0)
+	}
 	switch {
 	case text == "/exit" || text == "/quit":
 		return true
