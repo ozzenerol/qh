@@ -28,7 +28,7 @@ var slashCmds = []slashCmd{
 	{"/think off", "answer at once, faster and less careful"},
 	{"/web on", "let Qwen search the web and fetch pages"},
 	{"/web off", "no web tools (the default)"},
-	{"/view", "full-screen views: contract, review, profiler, sequence (alt+1..4)"},
+	{"/view", "full-screen views: contract, review, profiler, sequence (f1..f4)"},
 	{"/clear", "clear the screen"},
 	{"/exit", "quit"},
 }
@@ -53,8 +53,8 @@ func helpLines() []string {
 		{"ctrl+t", "show or hide the thinking"},
 		{"ctrl+r", "sessions: open, delete, clear finished runs"},
 		{"ctrl+o", "show or hide the last compaction summary"},
-		{"alt+1..4", "views: contract, review, profiler, sequence (f1..f4, /view)"},
-		{"alt+0 esc", "back to the chat from a view"},
+		{"f1..f4", "views: contract, review, profiler, sequence (/view NAME)"},
+		{"esc", "from a view back to the plain chat"},
 		{"ctrl+l", "clear the screen"},
 		{"ctrl+c ×2", "quit"},
 	} {
@@ -975,8 +975,6 @@ func (t *tui) insertText(b []byte) {
 func (t *tui) escape(p []byte) (int, uiAction) {
 	if p[1] != '[' && p[1] != 'O' {
 		switch p[1] { // Alt+key, as terminals send it with Option/Alt as Meta
-		case '0', '1', '2', '3', '4':
-			t.setView(int(p[1] - '0'))
 		case 0x7f, 0x08:
 			t.killBack(t.wordLeft(t.cur))
 		case 'b':
@@ -1557,6 +1555,15 @@ func chatTUI(session string, pick bool) error {
 		t.notice = "stopping…"
 	}
 
+	if !pick {
+		v := loadConfig().View
+		if v == "" {
+			v = "contract"
+		}
+		if n := viewByName(v); n > 0 {
+			t.setView(n)
+		}
+	}
 	t.draw()
 	t.flush()
 	for {
@@ -1654,7 +1661,7 @@ func (t *tui) submit() bool {
 	if text == "/view" || strings.HasPrefix(text, "/view ") {
 		n := viewByName(strings.TrimPrefix(text, "/view"))
 		if n < 0 {
-			t.notice = "views: contract, review, profiler, sequence, chat (alt+1..4, alt+0)"
+			t.notice = "views: contract, review, profiler, sequence, chat (f1..f4, esc)"
 		} else {
 			t.setView(n)
 		}

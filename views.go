@@ -14,8 +14,8 @@ import (
 
 // Full-screen views of a session, drawn in the terminal's alternate screen:
 // Contract (the brief and what qh checked), Review (the diff), Profiler
-// (where the time went) and Sequence (who sent what to whom). Alt+1..4 or
-// F1..F4 open them, Alt+0 or Esc goes back to the chat.
+// (where the time went) and Sequence (who sent what to whom). F1..F4 open
+// them, Esc goes back to the chat.
 
 const (
 	eAccent = "\x1b[38;2;255;138;61m"
@@ -520,19 +520,19 @@ func (t *tui) viewTabs(w int) string {
 	var b strings.Builder
 	b.WriteString(" ")
 	for i, n := range []string{"Contract", "Review", "Profiler", "Sequence"} {
-		lab := fmt.Sprintf("%d %s", i+1, n)
+		lab := fmt.Sprintf("F%d %s", i+1, n)
 		if t.view == i+1 {
 			b.WriteString(eAccent + cBold + "▸ " + lab + cReset + "   ")
 		} else {
 			b.WriteString(eMuted + "  " + lab + cReset + "   ")
 		}
 	}
-	b.WriteString(eMuted + "  0 chat")
+	b.WriteString(eMuted + "  esc chat")
 	return fit(b.String(), w)
 }
 
 func (t *tui) viewKeys() string {
-	k := "alt+1..4 views · esc chat · "
+	k := "f1..f4 views · esc chat · "
 	switch t.view {
 	case 1:
 		k += "↑↓ scroll"
@@ -613,7 +613,7 @@ func (t *tui) loadTodo() []TodoItem {
 func (t *tui) contractView(w, h int) []string {
 	tr := &t.tr
 	if tr.brief == "" {
-		return []string{"", eMuted + "  no brief in this session yet"}
+		return t.welcome(w)
 	}
 	rules, done, scope := briefRules(tr.brief)
 	todo := t.loadTodo()
@@ -722,7 +722,9 @@ func (t *tui) contractView(w, h int) []string {
 		if done == "" {
 			msg = "the brief has no Done when line"
 		}
-		chk = append(chk, eMuted+msg)
+		for _, l := range wrapPlain(msg, in) {
+			chk = append(chk, eMuted+l)
+		}
 	}
 	c3 = append(c3, card(chk, cw, eLine)...)
 	fails := 0
@@ -1372,6 +1374,44 @@ func (t *tui) sequenceView(w, h int) []string {
 			}
 		}
 		out = append(out, cv.String())
+	}
+	return out
+}
+
+// welcome is the Contract view before the first brief.
+func (t *tui) welcome(w int) []string {
+	cfg := loadConfig()
+	srv := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(cfg.URL, "http://"), "https://"), "/v1")
+	cw := min(64, w-4)
+	kv := func(k, v string) string { return eMuted + fit(k, 10) + cReset + clipLeft(v, cw-15) }
+	info := []string{
+		eAccent + cBold + "qh " + version + cReset,
+		kv("server", srv),
+		kv("project", shortPath(t.gitRoot())),
+		kv("session", t.session),
+	}
+	if m := t.shortModel(); m != "" {
+		info = append(info, kv("model", m))
+	}
+	help := []string{
+		eMuted + "WRITE A BRIEF",
+		"Type the task below. qh reads it like a contract:",
+		"",
+		eAccent + "1. 2. - *" + cReset + "    numbered and bulleted lines become rules",
+		eAccent + "Done when:" + cReset + "   the commands qh runs to check the work",
+		eAccent + "Change:" + cReset + "      the files qwen may touch",
+		"",
+		eMuted + "End a line with \\ to start a new one, or paste the brief.",
+		eMuted + "F2 review · F3 profiler · F4 sequence",
+		eMuted + "esc plain chat; config \"view\": \"chat\" opens there",
+	}
+	out := []string{""}
+	for _, l := range card(info, cw, eLine) {
+		out = append(out, "  "+l)
+	}
+	out = append(out, "")
+	for _, l := range card(help, cw, eAccent) {
+		out = append(out, "  "+l)
 	}
 	return out
 }

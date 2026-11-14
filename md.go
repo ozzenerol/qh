@@ -11,16 +11,16 @@ const (
 	cBold   = "\x1b[1m"
 	cDim    = "\x1b[2m"
 	cItalic = "\x1b[3m"
-	cAccent = "\x1b[38;5;173m" // the orange of the spinner and labels
+	cAccent = "\x1b[38;2;255;138;61m" // the orange of the spinner and labels
 	cGray   = "\x1b[38;5;245m"
 	cFrame  = "\x1b[38;5;240m"
-	cGreen  = "\x1b[38;5;114m"
-	cRed    = "\x1b[38;5;167m"
+	cGreen  = "\x1b[38;2;92;200;184m"
+	cRed    = "\x1b[38;2;255;107;107m"
 	cCode   = "\x1b[38;5;110m"
 	cUser   = "\x1b[38;5;252m"
-	cYou    = "\x1b[38;5;179m" // speaker tags in the chat
+	cYou    = "\x1b[38;2;255;138;61m" // speaker tags in the chat
 	cQwen   = "\x1b[38;5;73m"
-	cOpus   = "\x1b[38;5;176m"
+	cOpus   = "\x1b[38;2;199;146;234m"
 )
 
 // inline renders **bold**, `code` and *italic* in one line of Markdown.
