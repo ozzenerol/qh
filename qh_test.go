@@ -1330,3 +1330,21 @@ func TestProfileInSystemPrompt(t *testing.T) {
 		t.Fatal("unknown profile loaded")
 	}
 }
+
+func TestWalkLimit(t *testing.T) {
+	d := t.TempDir()
+	for i := range 600 {
+		os.WriteFile(filepath.Join(d, fmt.Sprintf("f%d.cs", i)), []byte("x"), 0o644)
+	}
+	old := walkLimit
+	walkLimit = 0
+	defer func() { walkLimit = old }()
+	tl := &Tools{Cwd: d}
+	out, ok := tl.glob(context.Background(), d, "*.cs")
+	if !ok || !strings.Contains(out, "the search stopped") {
+		t.Fatalf("glob: %v %q", ok, out)
+	}
+	if !strings.Contains(buildSystem(os.Getenv("HOME"), false), homeNote) || strings.Contains(buildSystem(d, false), homeNote) {
+		t.Fatal("home note")
+	}
+}

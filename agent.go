@@ -350,12 +350,19 @@ Do not ask for permission. Do the task.
 Never use emojis.
 When you finish, reply with the answer, then list the files you read.`
 
+// homeNote goes into the prompt when qh runs in the home folder, where a
+// search walks every file the user has.
+const homeNote = "This folder is the user's home directory, not a project. Answer questions and requests for example code from what you know. Do not search, list or read files here unless the user names a file or folder."
+
 func buildSystem(cwd string, readOnly bool) string {
 	tmpl := systemPrompt
 	if readOnly {
 		tmpl = systemPromptRO
 	}
 	s := fmt.Sprintf(tmpl, cwd, runtime.GOOS)
+	if h, err := os.UserHomeDir(); err == nil && filepath.Clean(cwd) == filepath.Clean(h) {
+		s += "\n\n" + homeNote
+	}
 	for _, f := range contextFiles(cwd) {
 		b, err := os.ReadFile(f)
 		if err != nil || len(strings.TrimSpace(string(b))) == 0 {

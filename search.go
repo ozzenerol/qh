@@ -3,12 +3,24 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// walkLimit is how long one glob or grep may walk; a search of a home folder
+// would take minutes. What it found by then is returned with a note.
+var walkLimit = 10 * time.Second
+
+var errWalkLimit = errors.New("walk limit")
+
+func walkNote(root string) string {
+	return fmt.Sprintf("[qh: the search stopped after %s and saw only part of %s. Search a smaller folder with path.]", walkLimit, root)
+}
 
 const (
 	grepMax = 100 // matching lines that grep returns
@@ -56,7 +68,12 @@ func matchSegs(p, s []string) bool {
 // walk calls fn for each regular file under root (a file or a directory),
 // with its path relative to the working directory.
 func (t *Tools) walk(ctx context.Context, root string, fn func(path, rel string)) error {
+	end := time.Now().Add(walkLimit)
+	n := 0
 	return filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if n++; n%256 == 0 && time.Now().After(end) {
+			return errWalkLimit
+		}
 		if err != nil {
 			if p == root {
 				return err
@@ -96,15 +113,19 @@ func (t *Tools) glob(ctx context.Context, root, pat string) (string, bool) {
 			}
 		}
 	})
-	if err != nil {
+	cut := errors.Is(err, errWalkLimit)
+	if err != nil && !cut {
 		return "error: " + err.Error(), false
 	}
-	if n == 0 {
-		return "no matches", true
-	}
 	res := strings.Join(out, "\n")
+	if n == 0 {
+		res = "no matches"
+	}
 	if n > len(out) {
 		res += fmt.Sprintf("\n[%d more]", n-len(out))
+	}
+	if cut {
+		res += "\n" + walkNote(root)
 	}
 	return res, true
 }
@@ -153,17 +174,22 @@ func (t *Tools) grep(ctx context.Context, pat, root, glob string, literal bool) 
 			}
 		}
 	})
-	if err != nil {
+	cut := errors.Is(err, errWalkLimit)
+	if err != nil && !cut {
 		return "error: " + err.Error(), false
 	}
+	note := ""
+	if cut {
+		note = "\n" + walkNote(root)
+	}
 	if n == 0 {
-		return "no matches", true
+		return "no matches" + note, true
 	}
 	if t.GrepCtx && n <= grepCtxMax {
-		return grepWithContext(hits), true
+		return grepWithContext(hits) + note, true
 	}
 	if n > grepMax {
 		fmt.Fprintf(&b, "[%d more]\n", n-grepMax)
 	}
-	return b.String(), true
+	return b.String() + note, true
 }
