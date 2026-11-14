@@ -158,7 +158,7 @@ func (a *Agent) runTask(ctx context.Context, t EvalTask, run int, timeout time.D
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	s := &Session{Name: "eval-" + t.Name, Cwd: repo, Think: true}
+	s := &Session{Name: "eval-" + t.Name, Cwd: repo, Think: true, Web: a.Cfg.web()}
 	st := a.Run(ctx, s, t.Prompt, "eval", func(e Event) {
 		switch e.T {
 		case "tool":

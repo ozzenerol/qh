@@ -44,7 +44,7 @@ type Config struct {
 	ExploreSteps int      `json:"explore_steps"` // step limit of one explore sub-run; 0 means 15
 	Confine      *bool    `json:"confine"`       // file tools stay in the project; nil means on
 	ReadRoots    []string `json:"read_roots"`    // more folders read, grep, ls may use; nil means the dependency caches
-	Web          bool     `json:"web"`           // new sessions get web_search and fetch_url
+	Web          *bool    `json:"web"`           // new sessions get web_search and fetch_url; nil means true
 	Logo         string   `json:"logo"`          // GIF shown in the chat header in kitty, e.g. ~/Downloads/bubu.gif
 	SearchURL    string   `json:"search_url"`    // SearXNG base URL for web_search, e.g. http://192.168.1.142:8080
 	Parallel     int      `json:"parallel"`      // model requests at once across sessions; 0 means 1
@@ -74,6 +74,9 @@ func sockPath() string {
 	d, _ := qhDir()
 	return filepath.Join(d, "qh.sock")
 }
+
+// web reports if new sessions get the web tools: on unless "web" is false.
+func (c Config) web() bool { return c.Web == nil || *c.Web }
 
 func (c Config) parallel() int {
 	if c.Parallel < 1 {
@@ -195,7 +198,7 @@ func (s *Server) session(name, cwd string) (*Session, error) {
 	if ss, ok := s.sessions[name]; ok {
 		return ss, nil
 	}
-	ss := &Session{Name: name, Cwd: cwd, Think: true, Web: s.cfg.Web}
+	ss := &Session{Name: name, Cwd: cwd, Think: true, Web: s.cfg.web()}
 	if d, err := qhDir(); err == nil {
 		if b, err := os.ReadFile(filepath.Join(d, "sessions", name+".json")); err == nil {
 			json.Unmarshal(b, ss)

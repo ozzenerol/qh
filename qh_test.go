@@ -250,7 +250,10 @@ func (m slowModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func TestAttachQueueCancel(t *testing.T) {
 	ts := httptest.NewServer(slowModel{delay: 300 * time.Millisecond})
 	defer ts.Close()
-	t.Setenv("QH_HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("QH_HOME", home)
+	// web off: with it on, user messages start with the date
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"web": false}`), 0o644)
 	t.Setenv("QH_URL", ts.URL+"/v1")
 	done := make(chan error, 1)
 	go func() { done <- serve() }()

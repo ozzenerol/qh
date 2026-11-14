@@ -161,7 +161,7 @@ Measured with `qh eval` on all 11 tasks, one run each (qwen36, 2026-11-10), all 
   "explore_steps": 15,
   "confine": true,
   "read_roots": ["~/.m2/repository", "~/.gradle/caches", "~/go/pkg/mod", "/usr/local/go/src"],
-  "web": false,
+  "web": true,
   "search_url": "",
   "batch_hint": true,
   "edit_snippet": true,
@@ -182,7 +182,7 @@ An empty `model` means the first model the server lists. A non-empty `api_key` g
 
 The file tools (read, grep, ls, glob, write, edit) stay inside the project: the git root of the working directory, or the working directory when it is in no repo. read, grep, ls and glob may also use the `read_roots` folders, by default the Maven, Gradle and Go module caches and the Go sources, so a run can read library code. A path outside gets an error, and symlinks count by where they point. bash is not limited. `"confine": false` turns this off.
 
-Web tools are off by default. `qh run -web`, `qh -web` or `/web on` in the chat turn on `web_search` and `fetch_url` for the session (`/web off` turns them off again), and `"web": true` gives them to every new session. `web_search` asks a SearXNG instance at `search_url` through its JSON API (`json` has to be in `search.formats` in SearXNG's settings.yml) and returns 8 results with title, URL and snippet. `fetch_url` returns a page as plain text, 10000 characters per call, with headings, list items and `pre` blocks kept; `offset` reads further. qh has no built-in search engine: DuckDuckGo's HTML page answered HTTP 202 (a bot check) from the second request on in a test, so it uses SearXNG. Turning web on or off changes the tool list, so the next request misses the prompt cache once.
+Web tools are on by default for new sessions; `"web": false` in the config turns them off, and `/web on|off` in the chat changes it for one session. `qh run -web` and `qh -web` turn them on for a session that has them off. They need `search_url`. `web_search` asks a SearXNG instance at `search_url` through its JSON API (`json` has to be in `search.formats` in SearXNG's settings.yml) and returns 8 results with title, URL and snippet. `fetch_url` returns a page as plain text, 10000 characters per call, with headings, list items and `pre` blocks kept; `offset` reads further. qh has no built-in search engine: DuckDuckGo's HTML page answered HTTP 202 (a bot check) from the second request on in a test, so it uses SearXNG. Turning web on or off changes the tool list, so the next request misses the prompt cache once.
 
 Profiles add language rules to the system prompt. `qh -p java` or `qh run -p java` sets the profile of the session. qh looks for `profiles/NAME.md` in the instance home (`~/.qh-NAME`), then in `~/.qh`, then uses the one built into the binary. Built in: `java` (Java and Spring Boot). Changing the profile rebuilds the system prompt, so the next request misses the prompt cache once.
 
