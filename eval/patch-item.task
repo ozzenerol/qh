@@ -1,0 +1,250 @@
+Add PATCH /items/{id} to the items service.
+
+Files: register the route in server.go next to the others, write the handler in handlers.go, add tests in handlers_test.go. Do not change store.go, and do not change the existing GET and POST handlers, writeJSON or writeErr.
+
+Request: the body is a JSON object with two optional fields, "name" (string) and "qty" (integer). A field that is absent leaves the item's value as it is. A field that is present sets it, also when the value is 0 for qty.
+
+Answers, each with Content-Type application/json and written with the existing writeJSON / writeErr helpers:
+1. id is not a positive integer: 400 {"error":"invalid_id"}.
+2. no item with that id: 404 {"error":"not_found"}.
+3. the body is not valid JSON, or not a JSON object: 400 {"error":"invalid_json"}.
+4. the body has a field other than name and qty: 400 {"error":"unknown_field"}.
+5. name is present and is null, empty, or only whitespace: 422 {"error":"name_blank"}. Store a valid name exactly as sent; do not trim it.
+6. qty is present and is null or negative: 422 {"error":"qty_invalid"}.
+7. otherwise: 200 with the whole updated item, the same JSON as GET returns.
+
+Check the rules in that order and return the first one that fails. A request that fails any rule changes nothing: validate everything before you call the store.
+
+Use the Go 1.22 method pattern ("PATCH /items/{id}") and r.PathValue("id"), the way the GET route does. Standard library only.
+
+Tests: in handlers_test.go, cover every numbered answer above, plus a PATCH with only qty 0 that keeps the name, and a failed PATCH that leaves the item unchanged.
+
+Done when: `go vet ./...` and `go test -count=1 ./...` pass.
+-- check.sh --
+set -e
+bad=$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep -v -e '^server.go$' -e '^handlers.go$' -e '^handlers_test.go$' || true)
+[ -z "$bad" ] || { echo "changed files outside the task: $bad"; exit 1; }
+for f in 'func writeJSON(w http.ResponseWriter, status int, v any) {' 'func writeErr(w http.ResponseWriter, status int, code string) {'; do
+	grep -qF "$f" handlers.go || { echo "helper signature changed: $f"; exit 1; }
+done
+git show HEAD:handlers.go | sed -n '/^func (s \*server) getItem/,/^}/p' > /tmp/qh-eval-get.$$
+sed -n '/^func (s \*server) getItem/,/^}/p' handlers.go | diff -q /tmp/qh-eval-get.$$ - >/dev/null || { echo "getItem was changed"; rm -f /tmp/qh-eval-get.$$; exit 1; }
+rm -f /tmp/qh-eval-get.$$
+go vet ./...
+cat > zz_eval_test.go <<'EOF'
+package items
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func evalDo(h http.Handler, method, path, body string) (int, string, string) {
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w.Code, strings.TrimSpace(w.Body.String()), w.Header().Get("Content-Type")
+}
+
+func TestEvalPatch(t *testing.T) {
+	st := NewStore()
+	st.Put(Item{ID: 7, Name: "bolt", Qty: 5})
+	h := NewServer(st)
+	cases := []struct {
+		path, body string
+		code       int
+		want       string
+	}{
+		{"/items/abc", `{"qty":1}`, 400, `{"error":"invalid_id"}`},
+		{"/items/0", `{"qty":1}`, 400, `{"error":"invalid_id"}`},
+		{"/items/-3", `{"qty":1}`, 400, `{"error":"invalid_id"}`},
+		{"/items/99", `{"qty":1}`, 404, `{"error":"not_found"}`},
+		{"/items/99", `{bad`, 404, `{"error":"not_found"}`},
+		{"/items/7", `{bad`, 400, `{"error":"invalid_json"}`},
+		{"/items/7", `[1,2]`, 400, `{"error":"invalid_json"}`},
+		{"/items/7", `"x"`, 400, `{"error":"invalid_json"}`},
+		{"/items/7", `{"qty":1,"price":2}`, 400, `{"error":"unknown_field"}`},
+		{"/items/7", `{"name":null}`, 422, `{"error":"name_blank"}`},
+		{"/items/7", `{"name":""}`, 422, `{"error":"name_blank"}`},
+		{"/items/7", `{"name":"  \t"}`, 422, `{"error":"name_blank"}`},
+		{"/items/7", `{"name":"nut","qty":-1}`, 422, `{"error":"qty_invalid"}`},
+		{"/items/7", `{"qty":null}`, 422, `{"error":"qty_invalid"}`},
+		{"/items/7", `{"name":" ","qty":-1}`, 422, `{"error":"name_blank"}`},
+	}
+	for _, c := range cases {
+		code, body, ct := evalDo(h, "PATCH", c.path, c.body)
+		if code != c.code || body != c.want {
+			t.Errorf("PATCH %s %s: got %d %s, want %d %s", c.path, c.body, code, body, c.code, c.want)
+		}
+		if ct != "application/json" {
+			t.Errorf("PATCH %s %s: Content-Type %q", c.path, c.body, ct)
+		}
+	}
+	if it, _ := st.Get(7); it != (Item{ID: 7, Name: "bolt", Qty: 5}) {
+		t.Fatalf("a failed PATCH changed the item: %+v", it)
+	}
+	code, body, _ := evalDo(h, "PATCH", "/items/7", `{"qty":0}`)
+	if code != 200 || body != `{"id":7,"name":"bolt","qty":0}` {
+		t.Fatalf("qty 0: %d %s", code, body)
+	}
+	code, body, _ = evalDo(h, "PATCH", "/items/7", `{"name":" nut "}`)
+	if code != 200 || body != `{"id":7,"name":" nut ","qty":0}` {
+		t.Fatalf("name kept as sent: %d %s", code, body)
+	}
+	code, body, _ = evalDo(h, "PATCH", "/items/7", `{}`)
+	if code != 200 || body != `{"id":7,"name":" nut ","qty":0}` {
+		t.Fatalf("empty object: %d %s", code, body)
+	}
+	if code, body, _ := evalDo(h, "GET", "/items/7", ""); code != 200 || body != `{"id":7,"name":" nut ","qty":0}` {
+		t.Fatalf("GET after PATCH: %d %s", code, body)
+	}
+	if code, _, _ := evalDo(h, "PUT", "/items/7", `{}`); code != 405 {
+		t.Fatalf("PUT should still be 405, got %d", code)
+	}
+}
+EOF
+go test -count=1 ./...
+rm zz_eval_test.go
+echo "all checks passed"
+-- go.mod --
+module items
+
+go 1.22
+-- store.go --
+package items
+
+import "sync"
+
+// Item is one stock item.
+type Item struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	Qty  int    `json:"qty"`
+}
+
+// Store keeps items in memory.
+type Store struct {
+	mu    sync.Mutex
+	items map[int]Item
+}
+
+// NewStore returns an empty store.
+func NewStore() *Store { return &Store{items: map[int]Item{}} }
+
+// Get returns the item with id, and false when there is none.
+func (s *Store) Get(id int) (Item, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it, ok := s.items[id]
+	return it, ok
+}
+
+// Put stores it, replacing an item with the same id.
+func (s *Store) Put(it Item) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.items[it.ID] = it
+}
+
+// NextID returns an id no item has.
+func (s *Store) NextID() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 1
+	for id := range s.items {
+		if id >= n {
+			n = id + 1
+		}
+	}
+	return n
+}
+-- server.go --
+package items
+
+import "net/http"
+
+type server struct{ st *Store }
+
+// NewServer returns the HTTP handler of the items service.
+func NewServer(st *Store) http.Handler {
+	s := &server{st: st}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /items/{id}", s.getItem)
+	mux.HandleFunc("POST /items", s.createItem)
+	return mux
+}
+-- handlers.go --
+package items
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+)
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeErr(w http.ResponseWriter, status int, code string) {
+	writeJSON(w, status, map[string]string{"error": code})
+}
+
+func (s *server) getItem(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || id < 1 {
+		writeErr(w, http.StatusBadRequest, "invalid_id")
+		return
+	}
+	it, ok := s.st.Get(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found")
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+func (s *server) createItem(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+		Qty  int    `json:"qty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	if strings.TrimSpace(in.Name) == "" {
+		writeErr(w, http.StatusUnprocessableEntity, "name_blank")
+		return
+	}
+	it := Item{ID: s.st.NextID(), Name: in.Name, Qty: in.Qty}
+	s.st.Put(it)
+	writeJSON(w, http.StatusCreated, it)
+}
+-- handlers_test.go --
+package items
+
+import (
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestCreateAndGet(t *testing.T) {
+	h := NewServer(NewStore())
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/items", strings.NewReader(`{"name":"bolt","qty":3}`)))
+	if w.Code != 201 {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/items/1", nil))
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"id":1,"name":"bolt","qty":3}` {
+		t.Fatalf("get: %d %s", w.Code, w.Body)
+	}
+}

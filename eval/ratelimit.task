@@ -1,0 +1,224 @@
+Write package ratelimit in limiter.go: a token bucket per key.
+
+API, exactly these four exported names and no others:
+- `type Limiter struct` with unexported fields only.
+- `func New(rate float64, burst int, now func() time.Time) *Limiter`: rate is tokens per second, burst is the bucket size, now is the clock. When now is nil, use time.Now.
+- `func (l *Limiter) Allow(key string) bool`: takes one token from the bucket of key and returns true, or returns false when the bucket holds less than one token.
+- `func (l *Limiter) Reset(key string)`: forgets key, so its next Allow sees a full bucket.
+
+Rules:
+1. A key seen for the first time starts with a full bucket (burst tokens).
+2. Refill is continuous: elapsed seconds times rate. Keep fractional tokens. Never hold more than burst tokens.
+3. When the clock goes backwards, add no tokens, do not panic, and do not move the bucket's last time backwards.
+4. New panics when rate <= 0 or burst < 1, with the message exactly "ratelimit: invalid rate or burst".
+5. Safe for concurrent use: one sync.Mutex field in Limiter guards all state.
+6. Do not use golang.org/x/time/rate or any module outside the standard library. go.mod must keep no require lines.
+7. Do not call time.Now anywhere except as the nil default in New.
+
+Tests: write limiter_test.go in package ratelimit_test (the external test package), using only the public API and a fake clock you control. The tests must fail for each of these wrong implementations: refill not capped at burst; fractional tokens dropped (refill rounded down to whole tokens at each call); a new key starting with an empty bucket; Reset that does nothing; the clock going backwards adding tokens.
+
+Do not create any file other than limiter.go and limiter_test.go.
+
+Done when: `go vet ./...` and `go test -race -count=1 ./...` pass.
+-- check.sh --
+set -e
+extra=$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep -v -e '^limiter.go$' -e '^limiter_test.go$' || true)
+[ -z "$extra" ] || { echo "files other than limiter.go and limiter_test.go: $extra"; exit 1; }
+! grep -q require go.mod || { echo "go.mod has require lines"; exit 1; }
+grep -q '^package ratelimit_test' limiter_test.go || { echo "limiter_test.go is not package ratelimit_test"; exit 1; }
+n=$(grep -c 'time\.Now' limiter.go || true)
+[ "$n" -le 1 ] || { echo "time.Now appears $n times in limiter.go"; exit 1; }
+exp=$(grep -hE '^(func|type|var|const) [A-Z]|^func \([^)]*\) [A-Z]' limiter.go | sed -E 's/^func \([^)]*\) //; s/^(func|type|var|const) //; s/[^A-Za-z0-9_].*//' | sort -u | tr '\n' ' ')
+[ "$exp" = "Allow Limiter New Reset " ] || { echo "exported names: $exp (want Allow Limiter New Reset)"; exit 1; }
+go vet ./...
+cat > zz_eval_test.go <<'EOF'
+package ratelimit
+
+import (
+	"sync"
+	"testing"
+	"time"
+)
+
+type clk struct{ t time.Time }
+
+func (c *clk) now() time.Time   { return c.t }
+func (c *clk) add(d time.Duration) { c.t = c.t.Add(d) }
+
+func TestEvalBurstAndRefill(t *testing.T) {
+	c := &clk{t: time.Unix(1000, 0)}
+	l := New(2, 3, c.now)
+	for i := 0; i < 3; i++ {
+		if !l.Allow("a") {
+			t.Fatalf("token %d of a full bucket refused", i+1)
+		}
+	}
+	if l.Allow("a") {
+		t.Fatal("4th token allowed with burst 3")
+	}
+	c.add(250 * time.Millisecond)
+	if l.Allow("a") {
+		t.Fatal("0.5 token allowed")
+	}
+	c.add(250 * time.Millisecond)
+	if !l.Allow("a") {
+		t.Fatal("two quarter seconds at rate 2 must make one token (fractions kept)")
+	}
+	c.add(time.Hour)
+	for i := 0; i < 3; i++ {
+		if !l.Allow("a") {
+			t.Fatalf("after an hour token %d refused", i+1)
+		}
+	}
+	if l.Allow("a") {
+		t.Fatal("refill not capped at burst")
+	}
+	if !l.Allow("b") {
+		t.Fatal("keys share a bucket")
+	}
+}
+
+func TestEvalBackwardsAndReset(t *testing.T) {
+	c := &clk{t: time.Unix(1000, 0)}
+	l := New(1, 1, c.now)
+	l.Allow("a")
+	c.add(-time.Hour)
+	if l.Allow("a") {
+		t.Fatal("clock going back added tokens")
+	}
+	c.add(time.Hour + 500*time.Millisecond)
+	if l.Allow("a") {
+		t.Fatal("the bucket's last time moved backwards: 0.5 s after the real last time must not give a token")
+	}
+	c.add(500 * time.Millisecond)
+	if !l.Allow("a") {
+		t.Fatal("one second after the last real time must give a token")
+	}
+	l.Reset("a")
+	if !l.Allow("a") {
+		t.Fatal("Reset did not refill")
+	}
+}
+
+func TestEvalPanic(t *testing.T) {
+	for _, c := range []struct {
+		r float64
+		b int
+	}{{0, 1}, {-1, 1}, {1, 0}} {
+		func() {
+			defer func() {
+				if r := recover(); r != "ratelimit: invalid rate or burst" {
+					t.Fatalf("New(%v,%v) panic = %v", c.r, c.b, r)
+				}
+			}()
+			New(c.r, c.b, nil)
+		}()
+	}
+}
+
+func TestEvalRace(t *testing.T) {
+	l := New(1000, 50, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				l.Allow(string(rune('a' + i%4)))
+				if j%50 == 0 {
+					l.Reset("a")
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+EOF
+go test -race -count=1 ./...
+rm zz_eval_test.go
+cp limiter.go /tmp/qh-eval-limiter.go.$$
+mutant() {
+	cat > limiter.go
+	if go test -count=1 ./... >/dev/null 2>&1; then
+		echo "your tests pass on a wrong implementation: $1"
+		cp /tmp/qh-eval-limiter.go.$$ limiter.go
+		exit 1
+	fi
+}
+body() {
+cat <<EOF
+package ratelimit
+
+import (
+	"sync"
+	"time"
+)
+
+type bucket struct {
+	tokens float64
+	last   time.Time
+}
+
+type Limiter struct {
+	mu    sync.Mutex
+	rate  float64
+	burst int
+	now   func() time.Time
+	b     map[string]*bucket
+}
+
+func New(rate float64, burst int, now func() time.Time) *Limiter {
+	if rate <= 0 || burst < 1 {
+		panic("ratelimit: invalid rate or burst")
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return &Limiter{rate: rate, burst: burst, now: now, b: map[string]*bucket{}}
+}
+
+func (l *Limiter) Allow(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t := l.now()
+	b, ok := l.b[key]
+	if !ok {
+		b = &bucket{tokens: $START, last: t}
+		l.b[key] = b
+	}
+	if d := t.Sub(b.last).Seconds(); $BACK {
+		b.tokens += $ADD
+		b.last = t
+	}
+	$CAP
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+func (l *Limiter) Reset(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	$RESET
+}
+EOF
+}
+ok_START='float64(l.burst)'; ok_BACK='d > 0'; ok_ADD='d * l.rate'; ok_CAP='if b.tokens > float64(l.burst) { b.tokens = float64(l.burst) }'; ok_RESET='delete(l.b, key)'
+run() { START=${START:-$ok_START} BACK=${BACK:-$ok_BACK} ADD=${ADD:-$ok_ADD} CAP=${CAP:-$ok_CAP} RESET=${RESET:-$ok_RESET} body; }
+START= BACK= ADD= CAP='_ = 0' RESET= run | mutant "refill not capped at burst"
+START= BACK= ADD='float64(int(d * l.rate))' CAP= RESET= run | mutant "fractional tokens dropped"
+START='0' BACK= ADD= CAP= RESET= run | mutant "a new key starts empty"
+START= BACK= ADD= CAP= RESET='_ = key' run | mutant "Reset does nothing"
+START= BACK='d != 0' ADD='abs(d) * l.rate' CAP= RESET= run | sed 's/^func (l \*Limiter) Reset/func abs(x float64) float64 { if x < 0 { return -x }; return x }\n\nfunc (l *Limiter) Reset/' | mutant "the clock going backwards adds tokens"
+cp /tmp/qh-eval-limiter.go.$$ limiter.go
+rm -f /tmp/qh-eval-limiter.go.$$
+echo "all checks passed"
+-- go.mod --
+module ratelimit
+
+go 1.22
+-- doc.go --
+// Package ratelimit limits how often each key may act.
+package ratelimit

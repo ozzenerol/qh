@@ -1,0 +1,163 @@
+Fix parseRecords in parse.go. It splits lines and fields by hand, so quoted fields break. Rewrite it with these rules:
+
+1. Read the input with encoding/csv. A field may be quoted and contain commas, quotes ("") and newlines.
+2. The first record is the header. It must be exactly the three fields name,email,age in that order (case-sensitive, no extra fields). Otherwise, and also for an empty input, return an error that wraps ErrBadHeader.
+3. Each later record must have exactly 3 fields. Fields are not trimmed.
+4. name must not be empty: otherwise the error wraps ErrNoName.
+5. age must be a whole number from 0 to 150 inclusive, parsed with strconv.Atoi: otherwise the error wraps ErrBadAge.
+6. email may be empty.
+7. Every error about a record (rules 3 to 5, and any error that encoding/csv returns for a record) has the form fmt.Errorf("line %d: %w", line, err), where line is the input line on which the record starts, counting from 1 for the header. A quoted field with newlines makes a record span more than one line, so the record number is not the line number: use csv.Reader.FieldPos.
+8. Stop at the first error and return nil records with it.
+
+Declare the three sentinel errors in parse.go, exported, with these exact texts: ErrBadHeader = errors.New("bad header"), ErrNoName = errors.New("no name"), ErrBadAge = errors.New("bad age"). Callers check them with errors.Is.
+
+Do not change api.go or its exported API. Do not log or print anything. Standard library only. Change only parse.go and parse_test.go.
+
+Tests: extend parse_test.go with a test per rule, including a quoted field with a comma, one with a newline followed by a bad row (to check the line number), and errors.Is checks for each sentinel.
+
+Done when: `go vet ./...` and `go test -count=1 ./...` pass.
+-- check.sh --
+set -e
+bad=$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep -v -e '^parse.go$' -e '^parse_test.go$' || true)
+[ -z "$bad" ] || { echo "changed files outside the task: $bad"; exit 1; }
+! grep -qE '"log"|fmt\.Print|println\(' parse.go || { echo "parse.go logs or prints"; exit 1; }
+grep -q '"encoding/csv"' parse.go || { echo "parse.go does not use encoding/csv"; exit 1; }
+go vet ./...
+cat > zz_eval_test.go <<'EOF'
+package csvimp
+
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestEvalImport(t *testing.T) {
+	in := "name,email,age\n\"Doe, Jane\",jane@x.io,41\n\"multi\nline\",,0\nBob,\"b\"\"ob@x.io\",150\n"
+	recs, err := Import(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Record{{"Doe, Jane", "jane@x.io", 41}, {"multi\nline", "", 0}, {"Bob", "b\"ob@x.io", 150}}
+	if len(recs) != len(want) {
+		t.Fatalf("got %d records: %+v", len(recs), recs)
+	}
+	for i := range want {
+		if recs[i] != want[i] {
+			t.Fatalf("record %d: %+v want %+v", i, recs[i], want[i])
+		}
+	}
+	if recs, err := Import(strings.NewReader(" name ,email,age\nA,,1\n")); err == nil || recs != nil {
+		t.Fatalf("fields are not trimmed: %v %v", recs, err)
+	}
+}
+
+func TestEvalErrors(t *testing.T) {
+	cases := []struct {
+		in   string
+		is   error
+		msg  string
+	}{
+		{"", ErrBadHeader, ""},
+		{"Name,email,age\n", ErrBadHeader, ""},
+		{"name,email\n", ErrBadHeader, ""},
+		{"name,email,age,x\n", ErrBadHeader, ""},
+		{"name,email,age\n,a@b,3\n", ErrNoName, "line 2: no name"},
+		{"name,email,age\nA,a@b,151\n", ErrBadAge, "line 2: bad age"},
+		{"name,email,age\nA,a@b,-1\n", ErrBadAge, "line 2: bad age"},
+		{"name,email,age\nA,a@b,4.0\n", ErrBadAge, "line 2: bad age"},
+		{"name,email,age\nA,a@b, 4\n", ErrBadAge, "line 2: bad age"},
+		{"name,email,age\n\"two\nlines\",,1\nC,,x\n", ErrBadAge, "line 4: bad age"},
+		{"name,email,age\nA,,1\n\"a\n\nb\",,1\n,,1\n", ErrNoName, "line 6: no name"},
+	}
+	for _, c := range cases {
+		recs, err := Import(strings.NewReader(c.in))
+		if recs != nil {
+			t.Errorf("%q: records with an error: %+v", c.in, recs)
+		}
+		if !errors.Is(err, c.is) {
+			t.Errorf("%q: error %v, want errors.Is %v", c.in, err, c.is)
+			continue
+		}
+		if c.msg != "" && err.Error() != c.msg {
+			t.Errorf("%q: message %q, want %q", c.in, err.Error(), c.msg)
+		}
+	}
+	if _, err := Import(strings.NewReader("name,email,age\nA,,1,extra\n")); err == nil || !strings.HasPrefix(err.Error(), "line 2: ") {
+		t.Errorf("4 fields: %v", err)
+	}
+	if _, err := Import(strings.NewReader("name,email,age\nA,,1\nB,\"x,2\n")); err == nil || !strings.HasPrefix(err.Error(), "line 3: ") {
+		t.Errorf("bad quote: %v", err)
+	}
+}
+EOF
+go test -count=1 ./...
+rm zz_eval_test.go
+echo "all checks passed"
+-- go.mod --
+module csvimp
+
+go 1.22
+-- api.go --
+package csvimp
+
+import "io"
+
+// Record is one person from the import file.
+type Record struct {
+	Name  string
+	Email string
+	Age   int
+}
+
+// Import reads a CSV file with the header name,email,age.
+func Import(r io.Reader) ([]Record, error) {
+	return parseRecords(r)
+}
+-- parse.go --
+package csvimp
+
+import (
+	"errors"
+	"io"
+	"strconv"
+	"strings"
+)
+
+func parseRecords(r io.Reader) ([]Record, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) == 0 || lines[0] != "name,email,age" {
+		return nil, errors.New("bad header")
+	}
+	var out []Record
+	for _, l := range lines[1:] {
+		f := strings.Split(l, ",")
+		if len(f) != 3 {
+			return nil, errors.New("wrong number of fields")
+		}
+		age, err := strconv.Atoi(f[2])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Record{Name: f[0], Email: f[1], Age: age})
+	}
+	return out, nil
+}
+-- parse_test.go --
+package csvimp
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestImportSimple(t *testing.T) {
+	recs, err := Import(strings.NewReader("name,email,age\nAnn,ann@x.io,30\n"))
+	if err != nil || len(recs) != 1 || recs[0] != (Record{"Ann", "ann@x.io", 30}) {
+		t.Fatalf("%+v %v", recs, err)
+	}
+}

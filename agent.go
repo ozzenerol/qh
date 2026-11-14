@@ -709,7 +709,7 @@ func (a *Agent) Run(ctx context.Context, s *Session, prompt, from string, emit f
 					editFile, editRun = wrotePath, 1
 				}
 				if editRun == 5 {
-					out += "\n\n[qh: that is 5 edits in a row on this file. For many small changes in one file, write the whole file once, or make them with one sed or perl command.]"
+					out += "\n\n[qh: that is 5 edits in a row on this file. For one change repeated in many places, make it with one sed or perl command. Do not write the whole file again for small changes.]"
 				}
 			} else if tc.Function.Name != "read" {
 				editFile, editRun = "", 0
