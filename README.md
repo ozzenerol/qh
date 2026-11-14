@@ -72,7 +72,7 @@ Each turn in the chat starts with who wrote it (`you`, `qwen`, or a label such a
 
 In the chat, Enter sends and Ctrl+J starts a new line (pasted text keeps its lines). Up and Down walk the history, Ctrl+T shows the thinking, Ctrl+R opens the session list, and Ctrl+C twice quits. Editing keys work as in a shell: Ctrl+W, Alt+Backspace or Ctrl+Backspace delete the word before the cursor, Alt+D or Ctrl+Delete the word after it, Ctrl+U and Ctrl+K delete to the start or end of the line, Ctrl+Y puts back what the last delete removed, Alt+Left/Right, Ctrl+Left/Right or Alt+B/F move by word, and Ctrl+A/E go to the start or end of the line. `/help` lists all keys. Type `/` for the command menu (`/new`, `/resume`, `/think on|off`, `/sessions`, `/clear`, `/exit`); ↑↓ picks one, Tab completes, Enter runs it. Without a terminal (a pipe, or `TERM=dumb`) qh uses a plain line chat.
 
-Sessions are saved in `~/.qh/sessions/NAME.json` after each step, so they survive a daemon restart. `qh sessions` lists them with the number of turns, the context size, and `RUNNING step N` for a run in progress (`WAITING for the model` while another session's run has the model), and who started it (`from opus`, `from qh run`, `from a terminal chat`). The session list in the chat (Ctrl+R or `/resume`) shows who started each session, its turns, context and age, and marks the ones near the compaction point. `d` deletes the selected session and `x` deletes every finished session that a `qh run` or another program started; sessions with a run going or open in a chat stay. `qh top` polls every daemon folder (`~/.qh` and `~/.qh-*`) once a second and shows its model server, the runs going on it, and the sessions of the last hour; with two daemons and 80 columns they sit side by side. A chat started with plain `qh` gets a new session named after the time (`1108-013105`); `qh run` uses `main` unless you give `-s`.
+Sessions are saved in `~/.qh/sessions/NAME.json` after each step, so they survive a daemon restart. `qh sessions` lists them with the number of turns, the context size, and `RUNNING step N` for a run in progress (`WAITING for the model` while another session's run has the model), and who started it (`from opus`, `from qh run`, `from a terminal chat`). The session list in the chat (Ctrl+R or `/resume`) shows who started each session, its turns, context and age, and marks the ones near the compaction point. `d` deletes the selected session and `x` deletes every finished session that a `qh run` or another program started; sessions with a run going or open in a chat stay. `qh top` polls every daemon folder (`~/.qh` and `~/.qh-*`) once a second and shows its model server, the runs going on it, and the sessions of the last hour; with two daemons and 80 columns they sit side by side. A chat started with plain `qh` gets a new session with a random 8-digit lowercase hex name (`3fa9c01e`); `qh run` uses `main` unless you give `-s`.
 
 ## Report facts
 
@@ -150,6 +150,7 @@ Measured with `qh eval` on all 11 tasks, one run each (qwen36, 2026-11-10), all 
 {
   "url": "http://127.0.0.1:8080/v1",
   "model": "",
+  "api_key": "",
   "max_steps": 120,
   "max_tokens": 16384,
   "think_budget": 30000,
@@ -177,7 +178,7 @@ Measured with `qh eval` on all 11 tasks, one run each (qwen36, 2026-11-10), all 
 }
 ```
 
-An empty `model` means the first model the server lists. `compact_at` 0 means 80% of `context`. `warn_ignore` holds regular expressions for compiler warning lines that the "Done when" checks should not count. Only compiler warnings count (Kotlin `w:`, `file:line: warning:`, Maven compiler `[WARNING] File.java:[l,c]`); JVM notices such as `WARNING: sun.misc.Unsafe` do not.
+An empty `model` means the first model the server lists. A non-empty `api_key` goes to the server as `Authorization: Bearer <key>`. `compact_at` 0 means 80% of `context`. `warn_ignore` holds regular expressions for compiler warning lines that the "Done when" checks should not count. Only compiler warnings count (Kotlin `w:`, `file:line: warning:`, Maven compiler `[WARNING] File.java:[l,c]`); JVM notices such as `WARNING: sun.misc.Unsafe` do not.
 
 The file tools (read, grep, ls, glob, write, edit) stay inside the project: the git root of the working directory, or the working directory when it is in no repo. read, grep, ls and glob may also use the `read_roots` folders, by default the Maven, Gradle and Go module caches and the Go sources, so a run can read library code. A path outside gets an error, and symlinks count by where they point. bash is not limited. `"confine": false` turns this off.
 

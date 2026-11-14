@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -574,7 +576,7 @@ func meter(n, of, cells int) string {
 	if of > 0 && n*10 >= of*8 {
 		c = cAccent
 	}
-	return c + strings.Repeat("▮", f) + cFrame + strings.Repeat("▯", cells-f) + cReset
+	return c + strings.Repeat("█", f) + cFrame + strings.Repeat("░", cells-f) + cReset
 }
 
 func (t *tui) draw() {
@@ -1383,8 +1385,12 @@ func nonEmpty(rows []SessionInfo) []SessionInfo {
 	return out
 }
 
-// newSessionName names a fresh chat session after the time it started.
-func newSessionName() string { return time.Now().Format("0102-150405") }
+// newSessionName names a fresh chat session with 8 random lowercase hex digits.
+func newSessionName() string {
+	b := make([]byte, 4)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 // latestSession is the newest session of cwd, or the newest one at all.
 func latestSession(cwd string) string {
