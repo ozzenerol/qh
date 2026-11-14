@@ -414,7 +414,7 @@ func (t *tui) drawView() {
 	h := termHeight(int(t.out.Fd()))
 	w := t.width - 1
 	rows := []string{t.viewHeader(w), t.viewTabs(w), eLine + strings.Repeat("─", w)}
-	bh := max(3, h-len(rows)-3)
+	bh := max(3, h-len(rows)-4)
 	var body []string
 	switch t.view {
 	case 1:
@@ -444,7 +444,7 @@ func (t *tui) drawView() {
 		}
 		rows = append(rows, pre+string(r))
 	}
-	rows = append(rows, eMuted+fit(" "+t.viewKeys(), w))
+	rows = append(rows, eLine+strings.Repeat("─", w), eMuted+fit(" "+t.viewKeys(), w))
 
 	key := strings.Join(rows, "\n") + fmt.Sprintf("|%d", col)
 	if key == t.viewKey {
@@ -459,7 +459,7 @@ func (t *tui) drawView() {
 		}
 	}
 	t.w("\x1b[J")
-	t.w(fmt.Sprintf("\x1b[%d;%dH", len(rows)-1, col+1))
+	t.w(fmt.Sprintf("\x1b[%d;%dH", len(rows)-2, col+1))
 }
 
 func (t *tui) viewHeader(w int) string {
