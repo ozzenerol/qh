@@ -169,6 +169,7 @@ type tui struct {
 	vscroll int      // lines scrolled
 	vsel    int      // selected step or hunk, -1 for the default
 	held    []string // lines printed while a view was open
+	tx      []string // the last lines of the transcript, for the views
 	resized bool     // the window changed size while a view was open
 	tr      trace
 	rv      review
@@ -212,6 +213,10 @@ func (t *tui) clearLive() {
 
 // print writes lines above the live area.
 func (t *tui) print(lines ...string) {
+	t.tx = append(t.tx, lines...)
+	if len(t.tx) > 600 {
+		t.tx = t.tx[len(t.tx)-400:]
+	}
 	if t.view != 0 {
 		t.held = append(t.held, lines...)
 		if len(t.held) > 5000 {
@@ -1482,7 +1487,7 @@ func (t *tui) switchTo(name string, events chan genEvent) {
 	t.session = name
 	t.running, t.tool, t.textPart, t.thinkPart, t.inMsg, t.inThink = false, "", "", "", false, false
 	t.tbl = nil
-	t.tr, t.rv, t.rvFile, t.todo, t.todoAt = trace{}, review{}, 0, nil, time.Time{}
+	t.tr, t.rv, t.rvFile, t.todo, t.todoAt, t.tx = trace{}, review{}, 0, nil, time.Time{}, nil
 	t.ctx, t.lastTS, t.attached = 0, "", false
 	for _, r := range listSessionsReq() {
 		if r.Name == name {
@@ -1495,6 +1500,7 @@ func (t *tui) switchTo(name string, events chan genEvent) {
 	t.clearLive()
 	t.w("\x1b[2J\x1b[H")
 	t.header()
+	t.tx = nil // the views have their own header
 	go attachLoop(name, t.cwd, t.me, t.gen, events, t.stopAttach)
 }
 

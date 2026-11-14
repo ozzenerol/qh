@@ -426,10 +426,13 @@ func (t *tui) drawView() {
 	case 4:
 		body = t.sequenceView(w, bh)
 	}
+	feed := t.feedLines(w, max(3, bh/3))
+	bh -= len(feed)
 	for len(body) < bh {
 		body = append(body, "")
 	}
 	rows = append(rows, body[:bh]...)
+	rows = append(rows, feed...)
 	rows = append(rows, eLine+strings.Repeat("─", w))
 	in := strings.ReplaceAll(string(t.buf), "\n", "⏎")
 	pre := " " + eAccent + cBold + "›" + cReset + " "
@@ -1412,6 +1415,32 @@ func (t *tui) welcome(w int) []string {
 	out = append(out, "")
 	for _, l := range card(help, cw, eAccent) {
 		out = append(out, "  "+l)
+	}
+	return out
+}
+
+// feedLines is the strip under every view: the last lines of the chat, so
+// answers and errors show while a view is open.
+func (t *tui) feedLines(w, n int) []string {
+	var src []string
+	for _, l := range t.tx {
+		if strings.TrimSpace(stripANSI(l)) != "" {
+			src = append(src, l)
+		}
+	}
+	if t.textPart != "" {
+		src = append(src, strings.Repeat(" ", gw)+t.md.line(t.textPart))
+	}
+	if t.running {
+		src = append(src, strings.Repeat(" ", gw)+eAccent+spinFrames[t.frame%len(spinFrames)]+" "+t.liveState())
+	}
+	if len(src) == 0 {
+		return nil
+	}
+	out := []string{eLine + "── chat " + strings.Repeat("─", max(0, w-8))}
+	src = src[max(0, len(src)-(n-1)):]
+	for _, l := range src {
+		out = append(out, clipCols(l, w))
 	}
 	return out
 }
