@@ -467,7 +467,7 @@ func lastDiff(root string) (string, error) {
 }
 
 var (
-	scopeStart = regexp.MustCompile(`(?i)^\s*[-*]?\s*(change only|only change|you may (only )?change|edit only|only edit|touch only|only touch|files you may change)\b`)
+	scopeStart = regexp.MustCompile(`(?i)^\s*[-*]?\s*(change only|only change|you may (only )?change|edit only|only edit|touch only|only touch|files you may change|change or create no file other than|change\s*:)`)
 	scopePath  = regexp.MustCompile("[A-Za-z0-9_.\\-]+(?:/[A-Za-z0-9_.\\-]+)+|[A-Za-z0-9_\\-]+\\.[A-Za-z0-9]{1,6}\\b")
 	scopeItem  = regexp.MustCompile(`^\s*([-*]|\d+[.)])\s+`)
 )

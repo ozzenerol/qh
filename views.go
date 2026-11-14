@@ -250,19 +250,14 @@ func briefRules(b string) (rules []string, done string, scope []string) {
 		switch {
 		case strings.HasPrefix(low, "done when"):
 			done = strings.TrimSpace(strings.TrimLeft(t[len("done when"):], ": "))
-		case strings.HasPrefix(low, "change:") || strings.HasPrefix(low, "change only"):
-			for _, f := range strings.FieldsFunc(t[6:], func(r rune) bool { return r == ' ' || r == ',' || r == '`' || r == '(' || r == ')' }) {
-				f = strings.TrimRight(f, ".;:")
-				if strings.ContainsAny(f, "./") && !strings.HasPrefix(f, "only") {
-					scope = append(scope, f)
-				}
-			}
+		case scopeStart.MatchString(t):
 		default:
 			if m := ruleRe.FindStringSubmatch(t); m != nil {
 				rules = append(rules, m[1])
 			}
 		}
 	}
+	scope = scopeFiles(b)
 	return
 }
 

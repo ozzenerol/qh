@@ -1348,3 +1348,14 @@ func TestWalkLimit(t *testing.T) {
 		t.Fatal("home note")
 	}
 }
+
+func TestScopeChangeLine(t *testing.T) {
+	got := scopeFiles("Goal: x\nChange: limiter/bucket.go, limiter/bucket_test.go\nDo NOT touch: go.mod")
+	if strings.Join(got, ",") != "limiter/bucket.go,limiter/bucket_test.go" {
+		t.Fatalf("got %v", got)
+	}
+	got = scopeFiles("Change or create no file other than api.go and api_test.go.")
+	if strings.Join(got, ",") != "api.go,api_test.go" {
+		t.Fatalf("got %v", got)
+	}
+}
