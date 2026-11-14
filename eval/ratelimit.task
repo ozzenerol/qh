@@ -17,7 +17,7 @@ Rules:
 
 Tests: write limiter_test.go in package ratelimit_test (the external test package), using only the public API and a fake clock you control. The tests must fail for each of these wrong implementations: refill not capped at burst; fractional tokens dropped (refill rounded down to whole tokens at each call); a new key starting with an empty bucket; Reset that does nothing; the clock going backwards adding tokens.
 
-Do not create any file other than limiter.go and limiter_test.go.
+Change or create no file other than limiter.go and limiter_test.go.
 
 Done when: `go vet ./...` and `go test -race -count=1 ./...` pass.
 -- check.sh --
@@ -26,8 +26,8 @@ extra=$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep -
 [ -z "$extra" ] || { echo "files other than limiter.go and limiter_test.go: $extra"; exit 1; }
 ! grep -q require go.mod || { echo "go.mod has require lines"; exit 1; }
 grep -q '^package ratelimit_test' limiter_test.go || { echo "limiter_test.go is not package ratelimit_test"; exit 1; }
-n=$(grep -c 'time\.Now' limiter.go || true)
-[ "$n" -le 1 ] || { echo "time.Now appears $n times in limiter.go"; exit 1; }
+n=$(sed 's|//.*||' limiter.go | grep -c 'time\.Now' || true)
+[ "$n" -le 1 ] || { echo "time.Now appears $n times in limiter.go outside comments"; grep -n "time\.Now" limiter.go; exit 1; }
 exp=$(grep -hE '^(func|type|var|const) [A-Z]|^func \([^)]*\) [A-Z]' limiter.go | sed -E 's/^func \([^)]*\) //; s/^(func|type|var|const) //; s/[^A-Za-z0-9_].*//' | sort -u | tr '\n' ' ')
 [ "$exp" = "Allow Limiter New Reset " ] || { echo "exported names: $exp (want Allow Limiter New Reset)"; exit 1; }
 go vet ./...
