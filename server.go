@@ -52,6 +52,7 @@ type Config struct {
 	WriteNote    *bool    `json:"write_note"`    // note when write rewrites a big file for a small change; nil means on
 	ReportLines  *int     `json:"report_lines"`  // line limit for the final report in the system prompt; nil means 8, 0 off
 	EditThink    *bool    `json:"edit_think"`    // think on the step after a clean edit/write/todo step; nil means off
+	Guard        *bool    `json:"guard"`         // check the code against the task and notes before the report (guard.go); nil means on
 	Sampling              // temperature, top_p, top_k; nil leaves the server default
 	FormatCfg
 	StepsCfg

@@ -997,6 +997,23 @@ func (a *Agent) finalChecks(ctx context.Context, tools *Tools, prompt string, cm
 			failed = msg
 		}
 	}
+	if a.Cfg.guardOn() && tools.Undo != nil {
+		var texts []string
+		for _, p := range contextFiles(tools.Cwd) {
+			if b, err := os.ReadFile(p); err == nil {
+				texts = append(texts, string(b))
+			}
+		}
+		if msg, found := guard(prompt, tools.Cwd, texts, tools.Undo.changes()); msg != "" {
+			emit(Event{T: "info", Text: fmt.Sprintf("qh review: %d findings", max(len(found), 1))})
+			st.Checks = append(st.Checks, found...)
+			if failed != "" {
+				failed += "\n\n" + msg
+			} else {
+				failed = msg
+			}
+		}
+	}
 	if len(notes) == 0 {
 		return failed
 	}
