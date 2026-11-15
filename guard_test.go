@@ -152,3 +152,13 @@ func TestGuardOnRepo(t *testing.T) {
 	msg, _ := guard(string(b), repo, nil, fs)
 	t.Log("\n" + msg)
 }
+
+func TestBriefAllowsReflection(t *testing.T) {
+	dir := t.TempDir()
+	if briefAllowsReflection("Set ids in tests with plain constructors.", dir) {
+		t.Fatal("no reflection named, but allowed")
+	}
+	if !briefAllowsReflection("Set the entity id with ReflectionTestUtils.setField(branch, \"id\", 1L).", dir) {
+		t.Fatal("brief names ReflectionTestUtils, but not allowed")
+	}
+}

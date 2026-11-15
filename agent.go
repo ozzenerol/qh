@@ -958,7 +958,7 @@ func (a *Agent) finalChecks(ctx context.Context, tools *Tools, prompt string, cm
 			notes = append(notes, fmt.Sprintf("%s: import %s is not used", rel, imp))
 		}
 	}
-	if smells := reflectionInTests(files); len(smells) > 0 {
+	if smells := reflectionInTests(files); len(smells) > 0 && !briefAllowsReflection(prompt, tools.Cwd) {
 		emit(Event{T: "info", Text: fmt.Sprintf("%d tests use reflection on private fields", len(smells))})
 		for _, m := range smells {
 			st.Checks = append(st.Checks, "qh note: "+m)
@@ -1560,6 +1560,23 @@ var reflectRe = regexp.MustCompile(`getDeclaredField|getDeclaredMethod|isAccessi
 
 // reflectionInTests lists the lines of changed test files that open up
 // private members by reflection.
+// briefAllowsReflection is true when the task or the notes ask for reflection
+// in tests by name, so the reflection nudge does not undo what they ask.
+func briefAllowsReflection(prompt, cwd string) bool {
+	texts := []string{prompt}
+	for _, p := range contextFiles(cwd) {
+		if b, err := os.ReadFile(p); err == nil {
+			texts = append(texts, string(b))
+		}
+	}
+	for _, t := range texts {
+		if strings.Contains(t, "ReflectionTestUtils") || strings.Contains(t, "setAccessible") || strings.Contains(t, "FieldUtils") {
+			return true
+		}
+	}
+	return false
+}
+
 func reflectionInTests(files []string) []string {
 	var out []string
 	for _, f := range files {
