@@ -349,6 +349,7 @@ func copiedEnums(added map[string][]addedLine, srcs map[string]string) []string 
 var (
 	privMethod = regexp.MustCompile(`(?m)^\s*private\s+(?:static\s+)?(?:final\s+)?(?:<[^>]+>\s+)?[\w<>\[\],.? ]+?\s+(\w+)\s*\(([^)]*)\)\s*(?:throws[\w\s,.]+)?\{`)
 	paramName  = regexp.MustCompile(`(\w+)\s*$`)
+	recordHead = regexp.MustCompile(`\brecord\s+$`)
 	localDecl  = regexp.MustCompile(`^\s*(?:final\s+)?(?:var|[A-Z][\w<>\[\],.? ]*?|int|long|double|boolean|char|byte|short|float)\s+(\w+)\s*=[^=]`)
 )
 
@@ -409,8 +410,8 @@ func unusedNames(added map[string][]addedLine, now map[string]string) []string {
 			body := bodyAt(src, m[1]-1)
 			name := src[m[2]:m[3]]
 			ln := lineOf(src, m[2])
-			if !isAdded[ln] {
-				continue
+			if !isAdded[ln] || recordHead.MatchString(src[m[0]:m[2]]) {
+				continue // record components are read through accessors
 			}
 			for _, p := range splitTop(src[m[4]:m[5]]) {
 				pm := paramName.FindStringSubmatch(strings.TrimSpace(p))

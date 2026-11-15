@@ -83,6 +83,8 @@ class S {
         return new Lent(used.getId());
     }
 
+    private record Stored(String hash, int status) {}
+
     private <T> T commitSave(T entity, JpaRepository<T, ?> repo) {
         return repo.save(entity);
     }
