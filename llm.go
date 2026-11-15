@@ -45,6 +45,14 @@ type LLM struct {
 	Model   string
 	APIKey  string
 	HTTP    *http.Client
+	Sample  Sampling // nil fields leave the server default
+}
+
+// Sampling is sent with every request when set.
+type Sampling struct {
+	Temperature *float64 `json:"temperature"`
+	TopP        *float64 `json:"top_p"`
+	TopK        *int     `json:"top_k"`
 }
 
 func (l *LLM) auth(req *http.Request) {
@@ -112,6 +120,15 @@ func (l *LLM) Chat(ctx context.Context, r Request, onDelta func(Delta) bool) (Me
 	}
 	if len(r.Tools) > 0 {
 		body["tools"] = r.Tools
+	}
+	if t := l.Sample.Temperature; t != nil {
+		body["temperature"] = *t
+	}
+	if p := l.Sample.TopP; p != nil {
+		body["top_p"] = *p
+	}
+	if k := l.Sample.TopK; k != nil {
+		body["top_k"] = *k
 	}
 	buf, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, "POST", l.BaseURL+"/chat/completions", bytes.NewReader(buf))

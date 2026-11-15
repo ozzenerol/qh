@@ -52,6 +52,7 @@ type Config struct {
 	WriteNote    *bool    `json:"write_note"`    // note when write rewrites a big file for a small change; nil means on
 	ReportLines  *int     `json:"report_lines"`  // line limit for the final report in the system prompt; nil means 8, 0 off
 	EditThink    *bool    `json:"edit_think"`    // think on the step after a clean edit/write/todo step; nil means off
+	Sampling              // temperature, top_p, top_k; nil leaves the server default
 	FormatCfg
 	StepsCfg
 	Repos map[string]FormatCfg `json:"repos"` // settings for one repo, by the folder name of its git root
@@ -443,7 +444,7 @@ func (s *Server) execRun(ctx context.Context, cancel context.CancelFunc, ss *Ses
 		ss.Profile = *req.Profile
 	}
 	s.save(ss) // the session is listed while it runs
-	llm := &LLM{BaseURL: s.cfg.URL, Model: s.cfg.Model, APIKey: s.cfg.APIKey, HTTP: &http.Client{}}
+	llm := &LLM{BaseURL: s.cfg.URL, Model: s.cfg.Model, APIKey: s.cfg.APIKey, HTTP: &http.Client{}, Sample: s.cfg.Sampling}
 	if err := llm.ResolveModel(ctx); err != nil {
 		all(Event{T: "error", Text: err.Error()})
 		all(Event{T: "done", From: req.From})
